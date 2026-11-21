@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"weave-os/router/internal/auth"
-	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/server/middleware"
 
@@ -97,7 +96,7 @@ func TestWithAuth_UpstreamGatewayTokenEntersGatewayMode(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 
 	ctx := h.seen.Context()
-	assert.Equal(t, "issuer-gw", ctx.Value(proxy.APIKeyIDContextKey{}), "spend and attribution stay on the bound issuer key")
+	assert.Equal(t, "issuer-gw", ctx.Value(requestcontext.APIKeyIDContextKey{}), "spend and attribution stay on the bound issuer key")
 	upstreamGateway, ok := requestcontext.UpstreamGatewayFrom(ctx)
 	require.True(t, ok)
 	assert.Equal(t, "gw-session-1", upstreamGateway.SessionID)

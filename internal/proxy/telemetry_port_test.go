@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"weave-os/router/internal/conversation"
 	"weave-os/router/internal/feedback"
 	"weave-os/router/internal/observability/otel"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
+	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/hmm"
 	"weave-os/router/internal/router/sessionpin"
@@ -115,8 +117,8 @@ func TestTelemetryPort_CommandFeedbackRecordsAndFlushes(t *testing.T) {
 		"max_tokens":1024,
 		"messages":[{"role":"user","content":"/router-feedback got stuck on Haiku for too long"}]
 	}`
-	ctx := context.WithValue(context.Background(), proxy.APIKeyIDContextKey{}, "key-1")
-	ctx = context.WithValue(ctx, proxy.InstallationIDContextKey{}, uuid.New().String())
+	ctx := context.WithValue(context.Background(), requestcontext.APIKeyIDContextKey{}, "key-1")
+	ctx = context.WithValue(ctx, requestcontext.InstallationIDContextKey{}, uuid.New().String())
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", strings.NewReader(""))
 
 	err := service.ProxyMessages(ctx, []byte(body), httptest.NewRecorder(), req)
@@ -131,7 +133,7 @@ func TestTelemetryPort_CommandFeedbackRecordsAndFlushes(t *testing.T) {
 	assert.Equal(t, "claude-haiku-4-5", attrs["feedback.served_model"])
 	assert.Equal(t, "claude-sonnet-4-6", attrs["requested.model"])
 	assert.Equal(t, "got stuck on Haiku for too long", attrs["feedback.text"])
-	assert.Equal(t, proxy.RouterFeedbackSourceUser, attrs["feedback.source"])
+	assert.Equal(t, conversation.RouterFeedbackSourceUser, attrs["feedback.source"])
 	assert.Contains(t, attrs, "client.app")
 }
 

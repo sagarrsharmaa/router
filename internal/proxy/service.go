@@ -121,21 +121,19 @@ type Service struct {
 	ccWorkspaceSystemAppend        bool
 	bandSwap                       *bandswap.Classifier
 
-	turnSignalCaptureEnabled     bool
-	feedbackStore                feedback.RouterFeedbackStore
-	summarizer                   handover.Summarizer
-	webSearch                    websearch.Executor
-	compactionHandoverSummarizer handover.Summarizer
-	availableModels              map[string]struct{}
-	defaultBaselineModel         string
-	billing                      *billing.Service
-	retrySleep                   func(context.Context, time.Duration) error
-	clock                        auth.Clock
-	feedbackRepo                 feedback.FeedbackRepository
-	feedbackSigner               *feedback.Signer
-	piHandoffSecret              []byte
-	feedbackBaseURL              string
-	usageObserver                *usage.Observer
+	turnSignalCaptureEnabled bool
+	summarizer               handover.Summarizer
+	webSearch                websearch.Executor
+	availableModels          map[string]struct{}
+	defaultBaselineModel     string
+	billing                  *billing.Service
+	retrySleep               func(context.Context, time.Duration) error
+	clock                    auth.Clock
+	feedbackRepo             feedback.FeedbackRepository
+	feedbackSigner           *feedback.Signer
+	piHandoffSecret          []byte
+	feedbackBaseURL          string
+	usageObserver            *usage.Observer
 }
 
 type registeredStrategy struct {
@@ -146,14 +144,10 @@ type registeredStrategy struct {
 	feedback     policy.FeedbackReporter
 }
 
-type APIKeyIDContextKey struct{}
-
 func apiKeyIDFromContext(ctx context.Context) string {
-	id, _ := ctx.Value(APIKeyIDContextKey{}).(string)
+	id, _ := ctx.Value(requestcontext.APIKeyIDContextKey{}).(string)
 	return id
 }
-
-type ExternalIDContextKey struct{}
 
 type codexResponsesBodyContextKey struct{}
 
@@ -173,18 +167,6 @@ type responsesFooterEchoedContextKey struct{}
 
 type codexTitleGenerationContextKey struct{}
 
-type InstallationExcludedModelsContextKey struct{}
-
-type InstallationAllowedModelsContextKey struct{}
-
-type InstallationSubscriptionStateModelsEnabledContextKey struct{}
-
-type InstallationSubscriptionModelsWhenActiveContextKey struct{}
-
-type InstallationSubscriptionModelsWhenInactiveContextKey struct{}
-
-type InstallationExcludedProvidersContextKey struct{}
-
 type SessionDisabledProvidersContextKey struct{}
 
 type SessionDemotedModelsContextKey struct{}
@@ -197,43 +179,13 @@ type SessionCooldownProbeDeniedModelsContextKey struct{}
 
 type SessionStrikeReadmitModelsContextKey struct{}
 
-type InstallationPreferredModelsContextKey struct{}
-
-type InstallationFastModeModelsContextKey struct{}
-
-type InstallationRoutingKnobsContextKey struct{}
-
-type ClusterModelListsContextKey struct{}
-
-type InstallationUsageBypassContextKey struct{}
-
-type InstallationSubscriptionRoutingDisabledContextKey struct{}
-
-type InstallationPickedModelCreditFallbackContextKey struct{}
-
-type InstallationHideTerminalSurfacesContextKey struct{}
-
-type InstallationShowModelSelectionReasoningContextKey struct{}
-
-type InstallationTrialCaptureContextKey struct{}
-
-type PolicyTrainingAllowedContextKey struct{}
-
-type PolicyDebugEnabledContextKey struct{}
-
-type PolicyRoutingIntentContextKey struct{}
-
-type PolicyRolloutIDContextKey struct{}
-
-type PolicyShadowStrategyContextKey struct{}
-
 type UsageBypassConfig struct {
 	Enabled   bool
 	Threshold *float64
 }
 
 func usageBypassFromContext(ctx context.Context) (UsageBypassConfig, bool) {
-	cfg, ok := ctx.Value(InstallationUsageBypassContextKey{}).(UsageBypassConfig)
+	cfg, ok := ctx.Value(requestcontext.InstallationUsageBypassContextKey{}).(UsageBypassConfig)
 	if !ok || !cfg.Enabled {
 		return UsageBypassConfig{}, false
 	}
@@ -482,7 +434,7 @@ func humanReasonFromPlanner(code string) string {
 }
 
 func installationExcludedModelsFromContext(ctx context.Context) []string {
-	v := ctx.Value(InstallationExcludedModelsContextKey{})
+	v := ctx.Value(requestcontext.InstallationExcludedModelsContextKey{})
 	if v == nil {
 		return nil
 	}
@@ -491,7 +443,7 @@ func installationExcludedModelsFromContext(ctx context.Context) []string {
 }
 
 func installationAllowedModelsFromContext(ctx context.Context) []string {
-	v := ctx.Value(InstallationAllowedModelsContextKey{})
+	v := ctx.Value(requestcontext.InstallationAllowedModelsContextKey{})
 	if v == nil {
 		return nil
 	}
@@ -500,7 +452,7 @@ func installationAllowedModelsFromContext(ctx context.Context) []string {
 }
 
 func installationSubscriptionModelsWhenActiveFromContext(ctx context.Context) []string {
-	v := ctx.Value(InstallationSubscriptionModelsWhenActiveContextKey{})
+	v := ctx.Value(requestcontext.InstallationSubscriptionModelsWhenActiveContextKey{})
 	if v == nil {
 		return nil
 	}
@@ -509,7 +461,7 @@ func installationSubscriptionModelsWhenActiveFromContext(ctx context.Context) []
 }
 
 func installationSubscriptionModelsWhenInactiveFromContext(ctx context.Context) []string {
-	out, _ := ctx.Value(InstallationSubscriptionModelsWhenInactiveContextKey{}).([]string)
+	out, _ := ctx.Value(requestcontext.InstallationSubscriptionModelsWhenInactiveContextKey{}).([]string)
 	if openRouterOverflowEnabled(ctx) {
 		return openRouterOverflowModels(out)
 	}
@@ -587,7 +539,7 @@ func (s *Service) routableUniverse() map[string]struct{} {
 }
 
 func subscriptionRoutingDisabledForRequest(ctx context.Context) bool {
-	disabled, _ := ctx.Value(InstallationSubscriptionRoutingDisabledContextKey{}).(bool)
+	disabled, _ := ctx.Value(requestcontext.InstallationSubscriptionRoutingDisabledContextKey{}).(bool)
 	return disabled
 }
 
@@ -603,7 +555,7 @@ func routingKnobsForRequest(ctx context.Context) *router.Overrides {
 	if k := router.RoutingKnobsFromContext(ctx); k != nil {
 		return k
 	}
-	if v, ok := ctx.Value(InstallationRoutingKnobsContextKey{}).(*router.Overrides); ok {
+	if v, ok := ctx.Value(requestcontext.InstallationRoutingKnobsContextKey{}).(*router.Overrides); ok {
 		return v
 	}
 	return nil
@@ -655,7 +607,7 @@ func installationExcludedProvidersFromContext(ctx context.Context) []string {
 	if planHasDedicatedServingPolicy(ctx) && !subscriptionStateModelsEnabled(ctx) {
 		return nil
 	}
-	v := ctx.Value(InstallationExcludedProvidersContextKey{})
+	v := ctx.Value(requestcontext.InstallationExcludedProvidersContextKey{})
 	if v == nil {
 		return nil
 	}
@@ -705,7 +657,7 @@ func (s *Service) excludedProvidersForRequest(ctx context.Context) map[string]st
 }
 
 func installationPreferredModelsFromContext(ctx context.Context) []string {
-	v := ctx.Value(InstallationPreferredModelsContextKey{})
+	v := ctx.Value(requestcontext.InstallationPreferredModelsContextKey{})
 	if v == nil {
 		return nil
 	}
@@ -717,7 +669,7 @@ func installationFastModeModelsFromContext(ctx context.Context) []string {
 	if planHasDedicatedServingPolicy(ctx) {
 		return nil
 	}
-	v := ctx.Value(InstallationFastModeModelsContextKey{})
+	v := ctx.Value(requestcontext.InstallationFastModeModelsContextKey{})
 	if v == nil {
 		return nil
 	}
@@ -748,7 +700,7 @@ func clusterArmOverridesForRequest(ctx context.Context) map[string][]string {
 		}
 		return mergeClusterOverrides(nil, auth.UserClusterModelListsFrom(ctx))
 	}
-	v := ctx.Value(ClusterModelListsContextKey{})
+	v := ctx.Value(requestcontext.ClusterModelListsContextKey{})
 	keyScoped, _ := v.(map[string][]string)
 	userScoped := auth.UserClusterModelListsFrom(ctx)
 	return mergeClusterOverrides(keyScoped, userScoped)
@@ -1248,11 +1200,6 @@ func (s *Service) WithTurnSignalCapture(enabled bool) *Service {
 	return s
 }
 
-func (s *Service) WithRouterFeedbackStore(store feedback.RouterFeedbackStore) *Service {
-	s.feedbackStore = store
-	return s
-}
-
 func (s *Service) WithContentCapture(mode ContentCaptureMode, maxBytes int, redactor Redactor) *Service {
 	s.captureMode = mode
 	if maxBytes > 0 {
@@ -1281,11 +1228,6 @@ func forcedReasoningEffort(model string, escalate bool) string {
 
 func (s *Service) WithSummarizer(sz handover.Summarizer) *Service {
 	s.summarizer = sz
-	return s
-}
-
-func (s *Service) WithCompactionHandoverSummarizer(sz handover.Summarizer) *Service {
-	s.compactionHandoverSummarizer = sz
 	return s
 }
 
@@ -1814,7 +1756,7 @@ func (s *Service) withPolicyRequestContext(ctx context.Context, req router.Reque
 	req.Candidates.AutomaticExcludedModels = candidates.MergeExcludedModels(req.Candidates.AutomaticExcludedModels, s.globalAutomaticExcludedModels(ctx))
 	req.ProductEligibility = entitlement.ModelBoundaryFromContext(ctx)
 	req.Candidates.ExcludedModels = candidates.MergeExcludedModels(req.Candidates.ExcludedModels, s.productIneligibleModels(ctx))
-	req.OrganizationID, _ = ctx.Value(ExternalIDContextKey{}).(string)
+	req.OrganizationID, _ = ctx.Value(requestcontext.ExternalIDContextKey{}).(string)
 	req.InstallationID = ""
 	if installationID := installationIDFromContext(ctx); installationID != uuid.Nil {
 		req.InstallationID = installationID.String()
@@ -1825,13 +1767,13 @@ func (s *Service) withPolicyRequestContext(ctx context.Context, req router.Reque
 	req.RolloutID = policyRolloutIDFromContext(ctx)
 	req.CaptureMode = s.effectiveCaptureMode(ctx).String()
 	req.TrainingAllowed = policyTrainingAllowedForRequest(ctx)
-	req.DebugEnabled, _ = ctx.Value(PolicyDebugEnabledContextKey{}).(bool)
-	req.RoutingIntent, _ = ctx.Value(PolicyRoutingIntentContextKey{}).(string)
+	req.DebugEnabled, _ = ctx.Value(requestcontext.PolicyDebugEnabledContextKey{}).(bool)
+	req.RoutingIntent, _ = ctx.Value(requestcontext.PolicyRoutingIntentContextKey{}).(string)
 	return req
 }
 
 func policyRolloutIDFromContext(ctx context.Context) string {
-	if rolloutID, ok := ctx.Value(PolicyRolloutIDContextKey{}).(string); ok && rolloutID != "" {
+	if rolloutID, ok := ctx.Value(requestcontext.PolicyRolloutIDContextKey{}).(string); ok && rolloutID != "" {
 		return rolloutID
 	}
 	return ClientIdentityFrom(ctx).RolloutID
@@ -2088,7 +2030,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 
 	clientBudget := resolveClientBudget(facts.Client, r.Header, env.Model(), modelVariant1M)
 	ctx = requestcontext.WithClientBudget(ctx, clientBudget)
-	agentShadowEval, agentShadowMode := AgentShadowEvalFromContext(ctx)
+	agentShadowEval, agentShadowMode := requestcontext.AgentShadowEvalFromContext(ctx)
 
 	var sessionKey [sessionpin.SessionKeyLen]byte
 	ctx, log, sessionKey = bindRequestLogger(ctx, env, facts.APIKeyID, facts.RequestID, "anthropic_messages")
@@ -2162,7 +2104,7 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 	if !agentShadowMode {
 		if cmd, hasCmd := env.ExtractRouterFeedbackCommand(); hasCmd {
 			log.Info("ProxyMessages router-feedback command")
-			if err := s.handleRouterFeedbackCommand(ctx, w, env, cmd, sessionTarget{strategy: strategy, installationID: facts.InstallationID, sessionKey: sessionKey}, feats.Tokens, !cmd.FromToolResult); err != nil {
+			if err := (routerFeedbackCommand{w: w, env: env, cmd: cmd, target: sessionTarget{strategy: strategy, installationID: facts.InstallationID, sessionKey: sessionKey}, inputTokens: feats.Tokens, synthetic: !cmd.FromToolResult}).handle(ctx, s); err != nil {
 				return err
 			}
 			if !cmd.FromToolResult {
@@ -2633,11 +2575,11 @@ func (s *Service) ProxyMessages(ctx context.Context, body []byte, w http.Respons
 
 	rescue := &messagesRescue{
 		rescueChain: &rescueChain{
-			rescuePorts: rescuePortsFor(s), strategyPorts: s.strategyPorts, seats: seatAdmissionOf(s), clock: s.clock, usageObserver: s.usageObserver,
+			rescuePorts: rescuePortsFor(s), markers: rescueMarkers{s.strategyPorts, r.Header, routeRes, s.usageObserver}, seats: seatAdmissionOf(s), clock: s.clock, usageObserver: s.usageObserver,
 			r:                r,
 			log:              log,
 			env:              env,
-			routeRes:         routeRes,
+			routeRes:         rescueTurnOf(routeRes),
 			req:              &req,
 			opts:             opts,
 			contentSink:      contentSink,
@@ -3220,8 +3162,8 @@ func (s *Service) reportPolicyOutcome(ctx context.Context, res turnLoopResult, d
 	if !ok {
 		return
 	}
-	organizationID, _ := ctx.Value(ExternalIDContextKey{}).(string)
-	installationID, _ := ctx.Value(InstallationIDContextKey{}).(string)
+	organizationID, _ := ctx.Value(requestcontext.ExternalIDContextKey{}).(string)
+	installationID, _ := ctx.Value(requestcontext.InstallationIDContextKey{}).(string)
 	trainingAllowed := policyTrainingAllowedForRequest(ctx)
 	clientIdentity := ClientIdentityFrom(ctx)
 	selectedServedModelMatch := routeDecision.Model == decision.Model
@@ -3479,57 +3421,6 @@ func (s *Service) excludeCodexOAuthOnlyModels(
 	return excluded
 }
 
-func resolveAndInjectCredentials(ctx context.Context, provider, model string, headers http.Header) context.Context {
-	byok := credentials.BuildCredentialsMap(credentials.ExternalKeysFromContext(ctx))
-	if byok[provider] != nil && byok[provider].FundingPriority == auth.FundingPriorityKeyFirst && !billing.ByokFeeUnpayable(ctx) {
-		return context.WithValue(ctx, CredentialsContextKey{}, byok[provider])
-	}
-	routerKeyed := installationIDFromContext(ctx) != (uuid.UUID{})
-	subDisabled := subscriptionRoutingDisabledForRequest(ctx) || subscriptionFundingOutOfPlayForRequest(ctx)
-	suppressClaudeSub := claudeSubscriptionSuppressed(ctx) || subDisabled || claudeModelSuppressed(ctx, model)
-	suppressCodexSub := codexSubscriptionSuppressed(ctx) || codexModelSuppressed(ctx, model) || codexChatEndpoint(ctx) || subDisabled || !codexSubscriptionCanAttemptModel(model)
-	if provider == providers.ProviderAnthropic && !suppressClaudeSub {
-		if sub := subscriptionCredsFromToken(anthropicSubscriptionFromContext(ctx)); sub != nil {
-			return context.WithValue(ctx, CredentialsContextKey{}, sub)
-		}
-		if inbound := ExtractClientCredentials(provider, headers); inbound != nil && inbound.OAuth {
-			observability.FromContext(ctx).Info("Resolved Claude subscription credential",
-				"credential_source", inbound.Source)
-			return context.WithValue(ctx, CredentialsContextKey{}, inbound)
-		}
-	}
-	if provider == providers.ProviderOpenAI && !suppressCodexSub {
-		if sub := codexSubscriptionFromContext(ctx); sub != nil {
-			return context.WithValue(ctx, CredentialsContextKey{}, sub)
-		}
-		if inbound := ExtractClientCredentials(provider, headers); inbound != nil && inbound.OAuth {
-			observability.FromContext(ctx).Debug("Resolved Codex subscription credential for OpenAI turn", "credential_source", inbound.Source)
-			return context.WithValue(ctx, CredentialsContextKey{}, inbound)
-		}
-	}
-	var creds *Credentials
-	if byok != nil {
-		creds = byok[provider]
-	}
-	if creds == nil && !routerKeyed {
-		client := ExtractClientCredentials(provider, headers)
-		if client != nil && client.OAuth &&
-			((provider == providers.ProviderAnthropic && suppressClaudeSub) ||
-				(provider == providers.ProviderOpenAI && suppressCodexSub)) {
-			client = nil
-		}
-		creds = client
-	}
-	if creds != nil {
-		return context.WithValue(ctx, CredentialsContextKey{}, creds)
-	}
-	if (suppressClaudeSub && provider == providers.ProviderAnthropic) ||
-		(suppressCodexSub && provider == providers.ProviderOpenAI) {
-		return clearCredentials(ctx)
-	}
-	return ctx
-}
-
 func addTimingAttrs(ctx context.Context, b *telemetry.AttrBuilder) {
 	applyServingSpanAttrs(ctx, b)
 	t := timing.TimingFrom(ctx)
@@ -3640,7 +3531,7 @@ func (s *Service) emitBilling(ctx context.Context, requestID, externalID, reques
 		return captureSubscriberSettlementState(ctx)
 	}
 	hasOverride := billing.HasOverrideFromContext(ctx)
-	apiKeyID, _ := ctx.Value(APIKeyIDContextKey{}).(string)
+	apiKeyID, _ := ctx.Value(requestcontext.APIKeyIDContextKey{}).(string)
 	s.fireBilling(ctx, billing.DebitInferenceParams{
 		OrganizationID:     externalID,
 		RouterRequestID:    requestID,
@@ -3847,7 +3738,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 		log.Info("ProxyOpenAIChatCompletion router-feedback command")
 		skillFeedback := codexSkillTurnFrom(ctx) == translate.CodexSkillTurnFeedback
 		synthetic := !cmd.FromToolResult || skillFeedback
-		if err := s.handleRouterFeedbackCommand(ctx, w, env, cmd, sessionTarget{strategy: strategy, installationID: facts.InstallationID, sessionKey: sessionKey}, feats.Tokens, synthetic); err != nil {
+		if err := (routerFeedbackCommand{w: w, env: env, cmd: cmd, target: sessionTarget{strategy: strategy, installationID: facts.InstallationID, sessionKey: sessionKey}, inputTokens: feats.Tokens, synthetic: synthetic}).handle(ctx, s); err != nil {
 			return err
 		}
 		if synthetic {
@@ -4285,11 +4176,11 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 	}
 	rescue := &chatRescue{
 		rescueChain: &rescueChain{
-			rescuePorts: rescuePortsFor(s), strategyPorts: s.strategyPorts, seats: seatAdmissionOf(s), clock: s.clock,
+			rescuePorts: rescuePortsFor(s), markers: rescueMarkers{s.strategyPorts, r.Header, routeRes, s.usageObserver}, seats: seatAdmissionOf(s), clock: s.clock,
 			r:                r,
 			log:              log,
 			env:              env,
-			routeRes:         routeRes,
+			routeRes:         rescueTurnOf(routeRes),
 			req:              &routeRequest,
 			opts:             opts,
 			contentSink:      contentSink,
@@ -4435,7 +4326,7 @@ func (s *Service) ProxyOpenAIChatCompletion(ctx context.Context, body []byte, w 
 		s.maybeDisableProviderAfterOverload(ctx, stickyHit, proxyErr, finalProvider, decision.Reason, sessionTarget{strategy: strategy, installationID: installationIDFromContext(ctx), sessionKey: routeRes.SessionKey}, stickyStateRole(routeRes), routeRes.PinRole)
 	}
 
-	installationIDOAI, _ := ctx.Value(InstallationIDContextKey{}).(string)
+	installationIDOAI, _ := ctx.Value(requestcontext.InstallationIDContextKey{}).(string)
 	if installationIDOAI != "" {
 		credentialKeyPrefix, credentialKeySuffix, credSource := s.credentialKeyParts(ctx)
 		s.markServedExternalKeyUsed(ctx, proxyErr)

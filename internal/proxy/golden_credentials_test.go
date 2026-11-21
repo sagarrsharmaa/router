@@ -209,8 +209,8 @@ func goldenUpstreamGatewayCtx(ctx context.Context) context.Context {
 }
 
 func goldenUnkeyedCtx(ctx context.Context) context.Context {
-	ctx = context.WithValue(ctx, proxy.APIKeyIDContextKey{}, "")
-	return context.WithValue(ctx, proxy.InstallationIDContextKey{}, "")
+	ctx = context.WithValue(ctx, requestcontext.APIKeyIDContextKey{}, "")
+	return context.WithValue(ctx, requestcontext.InstallationIDContextKey{}, "")
 }
 
 func goldenCreditsDeniedCtx(ctx context.Context) context.Context {

@@ -14,6 +14,6 @@ func hideTerminalSurfacesForRequest(ctx context.Context) bool {
 	if _, gateway := requestcontext.UpstreamGatewayFrom(ctx); gateway {
 		return true
 	}
-	hide, _ := ctx.Value(InstallationHideTerminalSurfacesContextKey{}).(bool)
+	hide, _ := ctx.Value(requestcontext.InstallationHideTerminalSurfacesContextKey{}).(bool)
 	return hide
 }

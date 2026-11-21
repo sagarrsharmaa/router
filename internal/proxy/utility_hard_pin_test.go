@@ -14,6 +14,7 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
@@ -85,7 +86,7 @@ func TestService_UtilityHardPin_CatalogTargetPerInstallation(t *testing.T) {
 			name:    "excluded_default_model",
 			clients: []string{providers.ProviderAnthropic},
 			ctx: func(id string) context.Context {
-				return context.WithValue(authedCtx(id), proxy.InstallationExcludedModelsContextKey{}, []string{policy.UtilityHardPinDefaultModel})
+				return context.WithValue(authedCtx(id), requestcontext.InstallationExcludedModelsContextKey{}, []string{policy.UtilityHardPinDefaultModel})
 			},
 			wantModel: catalog.ModelIDClaudeHaiku55.String(),
 			wantVia:   providers.ProviderAnthropic,
@@ -140,7 +141,7 @@ func TestService_UtilityHardPin_NoEligibleProviderIs400(t *testing.T) {
 	require.NotErrorIs(t, err, router.ErrRoutingUnavailable)
 	class, ok := proxy.ClassifyDispatchError(err)
 	require.True(t, ok)
-	assert.Equal(t, proxy.DispatchErrorNoEligibleProvider, class.Kind)
+	assert.Equal(t, ingress.DispatchErrorNoEligibleProvider, class.Kind)
 	assert.Equal(t, http.StatusBadRequest, class.Status)
 }
 
