@@ -367,3 +367,18 @@ func TestApplyModelAlias(t *testing.T) {
 			"surfaces that carry the model outside the body (e.g. in the URL) must not gain a stray field")
 	})
 }
+
+func TestBuildCredentialsMap_DropsRoutingModelAliases(t *testing.T) {
+	keys := []*auth.ExternalAPIKey{{
+		Provider:  "anthropic",
+		Plaintext: []byte("sk-ant-byok"),
+		ModelAliases: map[string]string{
+			"claude-sonnet-4-5": "weave-auto",
+			"claude-opus-4-1":   "gateway-opus",
+		},
+	}}
+	m := proxy.BuildCredentialsMap(keys)
+	require.Contains(t, m, "anthropic")
+	assert.Equal(t, map[string]string{"claude-opus-4-1": "gateway-opus"}, m["anthropic"].ModelAliases,
+		"a stored alias naming a routing model must never reach an upstream request")
+}

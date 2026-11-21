@@ -9,6 +9,7 @@ import (
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
+	"weave-os/router/internal/router"
 )
 
 const (
@@ -78,7 +79,7 @@ func BuildCredentialsMap(keys []*auth.ExternalAPIKey) map[string]*Credentials {
 			APIKey:       key.Plaintext,
 			Source:       credSourceBYOK,
 			BaseURL:      key.BaseURL,
-			ModelAliases: key.ModelAliases,
+			ModelAliases: wireModelAliases(key.ModelAliases),
 
 			IdentityHeader:         key.IdentityHeader,
 			IdentityHeaderFormat:   key.IdentityHeaderFormat,
@@ -111,4 +112,17 @@ func codexSubscriptionCreds(token, accountID string) *Credentials {
 
 func clearCredentials(ctx context.Context) context.Context {
 	return context.WithValue(ctx, CredentialsContextKey{}, (*Credentials)(nil))
+}
+
+func wireModelAliases(aliases map[string]string) map[string]string {
+	if aliases == nil {
+		return nil
+	}
+	out := make(map[string]string, len(aliases))
+	for model, alias := range aliases {
+		if !router.IsRoutingModel(alias) {
+			out[model] = alias
+		}
+	}
+	return out
 }
