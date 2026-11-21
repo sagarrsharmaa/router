@@ -609,14 +609,6 @@ func subscriptionFundingOutOfPlayForRequest(ctx context.Context) bool {
 	return ok && plan == entitlement.PlanMax
 }
 
-func hideTerminalSurfacesForRequest(ctx context.Context) bool {
-	if _, active := auth.BlindExperimentFrom(ctx); active {
-		return true
-	}
-	hide, _ := ctx.Value(InstallationHideTerminalSurfacesContextKey{}).(bool)
-	return hide
-}
-
 func routingKnobsForRequest(ctx context.Context) *router.Overrides {
 	if planHasDedicatedServingPolicy(ctx) {
 		return nil

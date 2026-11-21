@@ -101,7 +101,6 @@ func TestWithAuth_UpstreamGatewayTokenEntersGatewayMode(t *testing.T) {
 	gw, ok := requestcontext.UpstreamGatewayFrom(ctx)
 	require.True(t, ok)
 	assert.Equal(t, "gw-session-1", gw.SessionID)
-	assert.Equal(t, true, ctx.Value(proxy.InstallationHideTerminalSurfacesContextKey{}))
 	assert.Empty(t, h.seen.Header.Get("Authorization"), "the inbound gateway credential must not stay on the request")
 }
 

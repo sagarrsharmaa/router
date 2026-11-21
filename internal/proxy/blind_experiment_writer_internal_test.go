@@ -192,6 +192,12 @@ func TestBlindExperimentWriterUnusableRequestedModelStillDropsWeaveCost(t *testi
 	assert.Empty(t, rec.Header().Get("X-Router-Model"))
 }
 
+func TestUpstreamGatewayModeHidesTerminalSurfaces(t *testing.T) {
+	ctx := requestcontext.WithUpstreamGateway(context.Background(), nil, http.Header{})
+	assert.True(t, hideTerminalSurfacesForRequest(ctx))
+	assert.False(t, hideTerminalSurfacesForRequest(context.Background()))
+}
+
 func TestUpstreamGatewayWriterHidesRouterSurfacesButKeepsServedModel(t *testing.T) {
 	ctx := requestcontext.WithUpstreamGateway(context.Background(), nil, http.Header{})
 	rec := httptest.NewRecorder()
