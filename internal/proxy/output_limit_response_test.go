@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
@@ -62,11 +63,10 @@ func TestProxyOutputLimitAcrossResponsePaths(t *testing.T) {
 						w.WriteHeader(http.StatusOK)
 						_, _ = w.Write([]byte(response))
 					}}
-					svc := proxy.WithStrategyPorts(proxy.NewService(&fakeRouter{decision: router.Decision{Provider: path.provider, Model: path.model, Reason: "fresh"}},
-						map[string]providers.Client{path.provider: provider}, nil, store, false, path.provider, path.model, nil), hmm.ServingPorts()).
-						WithOpenAIResponsesBroad(path.wire == "responses").
-						WithNativeAnthropicResponseSignals(false).
-						WithNativeOpenAIResponseSignals(false)
+					svc := proxy.WithDeps(proxy.WithStrategyPorts(proxy.NewService(&fakeRouter{decision: router.Decision{Provider: path.provider, Model: path.model, Reason: "fresh"}},
+						dispatch.NewClients(map[string]providers.Client{path.provider: provider}), nil, store, false, path.provider, path.model, nil), hmm.ServingPorts()),
+						proxy.Deps{Telemetry: proxy.TelemetryDeps{Flags: &proxy.TelemetryFlags{TurnSignalCapture: true}}}).
+						WithIngress(responsesBroadFormats(path.wire == "responses"))
 					ctx := authedCtx(uuid.NewString())
 					rec := httptest.NewRecorder()
 					body := []byte(fmt.Sprintf(`{"model":%q,"max_tokens":64000,"stream":%t,"messages":[{"role":"user","content":"Inspect the repository files"}]}`, path.model, stream))
@@ -110,7 +110,7 @@ func TestProxyGeminiTelemetryClassifiesOutputCap(t *testing.T) {
 			}}
 			telem := newCaptureTelemetry()
 			svc := proxy.WithStrategyPorts(proxy.NewService(&fakeRouter{decision: router.Decision{Provider: providers.ProviderGoogle, Model: capGeminiModel, Reason: "fresh"}},
-				map[string]providers.Client{providers.ProviderGoogle: provider}, nil, newFakePinStore(), false,
+				dispatch.NewClients(map[string]providers.Client{providers.ProviderGoogle: provider}), nil, newFakePinStore(), false,
 				providers.ProviderGoogle, capGeminiModel, telem), hmm.ServingPorts())
 
 			body := []byte(`{"contents":[{"role":"user","parts":[{"text":"Inspect the repository files"}]}],"generationConfig":{"maxOutputTokens":64000}}`)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"weave-os/router/internal/routingpolicy"
 
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/flags"
@@ -22,7 +23,7 @@ type messagesAttemptDeps struct {
 	request                 *http.Request
 	svc                     *Service
 	env                     *translate.RequestEnvelope
-	routeRes                *turnLoopResult
+	routeRes                *routingpolicy.TurnRoute
 	log                     *slog.Logger
 	crossFormat             *bool
 	feats                   translate.RoutingFeatures
@@ -43,7 +44,7 @@ type messagesAttemptDeps struct {
 }
 
 func buildMessagesAttempt(ctx context.Context, deps messagesAttemptDeps, target router.Decision, targetOpts translate.EmitOptions, targetMarker string, fundingCtx context.Context) (dispatch.UpstreamAttempt, error) {
-	targetNotice := routerNoticeForRequest(withOwnClaudeRejectionNudge(ctx, deps.request.Header, deps.svc.usageObserver), deps.request.Header, subscriptions.ProviderClaude, target.Model, targetMarker)
+	targetNotice := routerNoticeForRequest(withOwnClaudeRejectionNudge(ctx, deps.request.Header, deps.svc.credentials.UsageObserver), deps.request.Header, subscriptions.ProviderClaude, target.Model, targetMarker)
 	targetNotice = addRoutingFundingSource(fundingCtx, seatAdmissionOf(deps.svc), target.Provider, target.Model, targetNotice)
 	switch providers.FamilyFor(target.Provider) {
 	case providers.FamilyAnthropic:
@@ -131,7 +132,7 @@ func buildMessagesAttempt(ctx context.Context, deps messagesAttemptDeps, target 
 					WithRequestHadTools(deps.feats.HasTools).
 					WithThinkTagReasoning(catalog.ThinkTagReasoningFor(d.Model)).
 					WithSeedToolCallMarkup(deps.env.SeedToolCallNames(prep.ResponseToolNames)).
-					WithEscapeNormalize(flags.BoolOr(ctx, flags.KeyEscapeNormalize, deps.svc.escapeNormalize)).
+					WithEscapeNormalize(flags.BoolOr(ctx, flags.KeyEscapeNormalize, deps.svc.ingress.EscapeNormalize)).
 					WithToolValidator(deps.toolValidator)
 				if providers.OutputExcludesReasoning(d.Provider) {
 					chatTranslator.SetUsageOutputBasis(providerusage.OutputExcludesReasoning)
@@ -165,13 +166,13 @@ func buildMessagesAttempt(ctx context.Context, deps messagesAttemptDeps, target 
 				Capabilities:   targetOpts.Capabilities,
 				HasTools:       deps.feats.HasTools,
 				ChatOnlyParams: deps.env.RequiresChatCompletionsParams(targetOpts.Capabilities),
-				Broad:          deps.svc.ResolveOpenAIResponsesBroad(actx),
-			}) && !deps.svc.gatewayCaps.LacksResponses(gatewayKey)
-			stripPromptCacheKey := deps.svc.gatewayCaps.RejectsPromptCacheKey(gatewayKey)
+				Broad:          deps.svc.ingress.ResponsesBroad(actx),
+			}) && !deps.svc.engine.GatewayCaps().LacksResponses(gatewayKey)
+			stripPromptCacheKey := deps.svc.engine.GatewayCaps().RejectsPromptCacheKey(gatewayKey)
 			finalize, rawErr := dispatchOpenAICompat(actx, d, p, useResponses, stripPromptCacheKey)
 			if rawErr != nil && useResponses && !committed(deps.preludeBuf) &&
 				providers.IsUpstreamResponsesUnsupported(rawErr) {
-				deps.svc.gatewayCaps.RememberLacksResponses(gatewayKey)
+				deps.svc.engine.GatewayCaps().RememberLacksResponses(gatewayKey)
 				deps.log.Warn("Gateway rejected the Responses API; retrying on chat/completions",
 					"model", d.Model,
 					"decision_provider", d.Provider)
@@ -183,7 +184,7 @@ func buildMessagesAttempt(ctx context.Context, deps messagesAttemptDeps, target 
 			}
 			if rawErr != nil && !stripPromptCacheKey && gatewayKey != "" && !committed(deps.preludeBuf) &&
 				providers.IsUpstreamPromptCacheKeyRejection(rawErr) {
-				deps.svc.gatewayCaps.RememberRejectsPromptCacheKey(gatewayKey)
+				deps.svc.engine.GatewayCaps().RememberRejectsPromptCacheKey(gatewayKey)
 				deps.log.Warn("Gateway rejected prompt_cache_key; retrying without the affinity hint",
 					"model", d.Model,
 					"decision_provider", d.Provider)
@@ -220,7 +221,7 @@ func buildMessagesAttempt(ctx context.Context, deps messagesAttemptDeps, target 
 				WithLogger(deps.log).
 				WithEstimatedInputTokens(deps.feats.Tokens).
 				WithRequestHadTools(deps.feats.HasTools).
-				WithEscapeNormalize(flags.BoolOr(ctx, flags.KeyEscapeNormalize, deps.svc.escapeNormalize)).
+				WithEscapeNormalize(flags.BoolOr(ctx, flags.KeyEscapeNormalize, deps.svc.ingress.EscapeNormalize)).
 				WithToolValidator(deps.toolValidator)
 			if err := anthropicTr.Prelude(deps.env.Stream()); err != nil {
 				return func(err error) error { return err }, fmt.Errorf("emit Anthropic routing marker: %w", err)

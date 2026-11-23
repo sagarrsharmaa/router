@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"weave-os/router/internal/dispatch"
+	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
@@ -28,7 +30,7 @@ func TestCodexNativeModelSelection_ForcesModelAndEffort(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}`)
 	}}
 	routerStub := &fakeRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: "gpt-5.6-luna", Reason: "fresh"}}
-	svc := proxy.WithStrategyPorts(proxy.NewService(routerStub, map[string]providers.Client{providers.ProviderOpenAI: provider}, nil, nil, false, providers.ProviderOpenAI, "gpt-5.6-sol", nil), hmm.ServingPorts())
+	svc := proxy.WithStrategyPorts(proxy.NewService(routerStub, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: provider}), nil, nil, false, providers.ProviderOpenAI, "gpt-5.6-sol", nil), hmm.ServingPorts())
 	ctx := context.WithValue(context.Background(), proxy.ClientIdentityContextKey{}, requestcontext.ClientIdentity{ClientApp: requestcontext.ClientAppCodex})
 	body := []byte(`{"model":"gpt-6-sol","input":[` + codexModelSwitchInput + `,{"type":"message","role":"user","content":"review this change"}],"reasoning":{"effort":"max"}}`)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", nil)
@@ -71,7 +73,7 @@ func TestCodexNativeModelSelection_AutomaticAndLegacyStillScore(t *testing.T) {
 				_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}`)
 			}}
 			routerStub := &fakeRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: "gpt-5.6-luna", Reason: "fresh"}}
-			svc := proxy.WithStrategyPorts(proxy.NewService(routerStub, map[string]providers.Client{providers.ProviderOpenAI: provider}, nil, nil, false, providers.ProviderOpenAI, "gpt-5.6-sol", nil), hmm.ServingPorts())
+			svc := proxy.WithStrategyPorts(proxy.NewService(routerStub, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: provider}), nil, nil, false, providers.ProviderOpenAI, "gpt-5.6-sol", nil), hmm.ServingPorts())
 			ctx := context.WithValue(context.Background(), proxy.ClientIdentityContextKey{}, requestcontext.ClientIdentity{ClientApp: requestcontext.ClientAppCodex})
 			input := `[{"type":"message","role":"user","content":"review this change"}]`
 			if tc.switched {
@@ -113,13 +115,13 @@ func TestCodexNativeModelSelection_ModelInstructionsPinOnlyForCatalogClients(t *
 				_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","output":[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}]}`)
 			}}
 			routerStub := &fakeRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: "gpt-5.6-luna", Reason: "fresh"}}
-			svc := proxy.WithStrategyPorts(proxy.NewService(routerStub, map[string]providers.Client{providers.ProviderOpenAI: provider}, nil, nil, false, providers.ProviderOpenAI, "gpt-5.6-sol", nil), hmm.ServingPorts())
+			svc := proxy.WithStrategyPorts(proxy.NewService(routerStub, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: provider}), nil, nil, false, providers.ProviderOpenAI, "gpt-5.6-sol", nil), hmm.ServingPorts())
 			ctx := context.WithValue(context.Background(), proxy.ClientIdentityContextKey{}, requestcontext.ClientIdentity{ClientApp: requestcontext.ClientAppCodex})
 			body := []byte(`{"model":"gpt-6-sol","input":[` + codexModelInstructionsInput + `,{"type":"message","role":"user","content":"review this change"}]}`)
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", nil)
 			req.Header.Set(requestcontext.CodexNativeModelPinHeader, "1")
 			if tc.catalogClient {
-				req.Header.Set(proxy.CodexModelCatalogHeader, "1")
+				req.Header.Set(ingress.CodexModelCatalogHeader, "1")
 			}
 			rec := httptest.NewRecorder()
 			require.NoError(t, svc.ProxyOpenAIResponses(ctx, body, rec, req))

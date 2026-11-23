@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"weave-os/router/internal/conversation"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/feedback"
 	"weave-os/router/internal/observability/otel"
 	"weave-os/router/internal/providers"
@@ -61,10 +62,9 @@ func TestTelemetryPort_LinkFeedbackRecordsAndFlushes(t *testing.T) {
 	recorder := &capturingTelemetryRecorder{}
 	emitter := &capturingTelemetryEmitter{recorder: recorder}
 	comment := "The response was helpful."
-	service := proxy.WithStrategyPorts(proxy.NewService(nil, nil, emitter, nil, false, "", "", nil), hmm.ServingPorts()).
-		WithFeedback(&fakeFeedbackRepoForSpanTest{}, feedback.NewSigner("secret", time.Hour), "https://router.example.com")
+	links := feedback.NewLinks(&fakeFeedbackRepoForSpanTest{}, feedback.NewSigner("secret", time.Hour), "https://router.example.com", emitter, time.Now)
 
-	err := service.SubmitFeedback(context.Background(), feedback.SubmitFeedbackParams{
+	err := links.SubmitFeedback(context.Background(), feedback.SubmitFeedbackParams{
 		InstallationID: "inst-1",
 		ExternalID:     "org-1",
 		RequestID:      "req-1",
@@ -104,7 +104,7 @@ func TestTelemetryPort_CommandFeedbackRecordsAndFlushes(t *testing.T) {
 	fr := &fakeRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: "claude-sonnet-4-6", Reason: "cluster"}}
 	service := proxy.WithStrategyPorts(proxy.NewService(
 		fr,
-		map[string]providers.Client{providers.ProviderAnthropic: &fakeProvider{}},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &fakeProvider{}}),
 		emitter,
 		store,
 		false,

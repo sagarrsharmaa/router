@@ -5,6 +5,7 @@ import (
 
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router/catalog"
 	"weave-os/router/internal/subscriptions/entitlement"
@@ -93,11 +94,11 @@ func telemetryCapacitySource(ctx context.Context, credentialSource string) entit
 		return entitlement.CapacitySourceBillingOverride
 	}
 	switch credentialSource {
-	case credSourceSubscription, credSourceSubscriptionOverage:
+	case requestcontext.SourceSubscription, requestcontext.SourceSubscriptionOverage:
 		return entitlement.CapacitySourceLinkedClaude
-	case credSourceCodexSubscription:
+	case requestcontext.SourceCodexSubscription:
 		return entitlement.CapacitySourceLinkedCodex
-	case credSourceBYOK:
+	case requestcontext.SourceBYOK:
 		return ""
 	}
 	if _, ok := entitlement.CoverageFromContext(ctx); ok {
@@ -128,7 +129,7 @@ func canonicalTelemetryModelFamily(model string) string {
 func applySubscriptionWinnerTelemetry(ctx context.Context, telemetry *turnrecord.InsertTelemetryParams) {
 	telemetry.FinalModelFamily = canonicalTelemetryModelFamily(telemetry.DecisionModel)
 	telemetry.IntendedModelFamily = canonicalTelemetryModelFamily(telemetry.RequestedModel)
-	winningUsage, _ := ctx.Value(credentials.ManagedSubscriptionUsageContextKey{}).(*ManagedSubscriptionUsage)
+	winningUsage, _ := ctx.Value(credentials.ManagedSubscriptionUsageContextKey{}).(*credentials.ManagedSubscriptionUsage)
 	if winningUsage == nil {
 		return
 	}
@@ -144,12 +145,17 @@ func applySubscriptionWinnerTelemetry(ctx context.Context, telemetry *turnrecord
 }
 
 func (s *Service) applySubscriptionSpanTelemetry(ctx context.Context, attrs *telemetry.AttrBuilder, requestedModel, selectedModel string) {
-	if keyID := apiKeyIDFromContext(ctx); keyID != "" {
+	if keyID := requestcontext.APIKeyIDFromContext(ctx); keyID != "" {
 		attrs.String("api_key_id", keyID)
 	}
 	_, _, source := s.credentialKeyParts(ctx)
 	if source != "" {
 		attrs.String("credential.source", source)
+	}
+	if source == requestcontext.SourceSubscription || source == requestcontext.SourceSubscriptionOverage {
+		if creds := credentials.CredentialsFromContext(ctx); creds != nil && creds.OAuth && creds.SubscriptionPlan == providers.SubscriptionPlanEnterprise {
+			attrs.Bool("subscription.claude_enterprise", true)
+		}
 	}
 	telemetry := turnrecord.InsertTelemetryParams{RequestedModel: requestedModel, DecisionModel: selectedModel}
 	applySubscriptionWinnerTelemetry(ctx, &telemetry)
@@ -167,7 +173,7 @@ func (s *Service) applySubscriptionSpanTelemetry(ctx context.Context, attrs *tel
 }
 
 func applySubscriptionDecisionSpanTelemetry(ctx context.Context, attrs *telemetry.AttrBuilder, requestedModel, selectedModel string) {
-	if keyID := apiKeyIDFromContext(ctx); keyID != "" {
+	if keyID := requestcontext.APIKeyIDFromContext(ctx); keyID != "" {
 		attrs.String("api_key_id", keyID)
 	}
 	intendedModel := requestedModel

@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"weave-os/router/internal/conversation"
+	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
+	"weave-os/router/internal/router/hmm"
 	"weave-os/router/internal/router/sessionpin"
 	"weave-os/router/internal/translate"
 
@@ -100,7 +103,7 @@ func (s *evictionStubPinStore) SweepExpired(context.Context) error { return nil 
 func newEvictionTestService(store *evictionStubPinStore) *Service {
 	return withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -199,7 +202,7 @@ func TestExpireSessionPinAndHMMHistoryExpiresBothRoles(t *testing.T) {
 	installationID := uuid.New()
 	sessionKey := nonZeroSessionKey()
 
-	err := svc.expireSessionPinAndHMMHistory(
+	err := svc.expireSessionPinAndSwitchHistory(
 		context.Background(), router.StrategyFromContext(context.Background()),
 		installationID,
 		sessionKey,
@@ -210,7 +213,7 @@ func TestExpireSessionPinAndHMMHistoryExpiresBothRoles(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, store.upserts, 2)
 	assert.Equal(t, sessionpin.DefaultRole, store.upserts[0].Role)
-	assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), store.upserts[1].Role)
+	assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), store.upserts[1].Role)
 	assert.Equal(t, []string{conversation.CommandContinuationRole(sessionpin.DefaultRole)}, store.consumeRoles,
 		"only the primary pin may invalidate a post-command continuation")
 	for _, expired := range store.upserts {
@@ -400,7 +403,7 @@ func TestMaybeEvictPin_SubscriptionPoolExhaustedLeavesStrikeCounter(t *testing.T
 	svc.maybeEvictPinAfterUpstreamErr(
 		context.Background(),
 		true,
-		ErrSubscriptionPoolExhausted,
+		credentials.ErrSubscriptionPoolExhausted,
 		"hmm_policy", sessionTarget{strategy: router.StrategyFromContext(context.Background()), installationID: installationID, sessionKey: sessionKey},
 
 		sessionpin.DefaultRole)
@@ -419,7 +422,7 @@ func TestMaybeExpireSubscriptionArmPin(t *testing.T) {
 		decisionReason string
 		wantReason     string
 	}{
-		{"pool exhaustion evicts the pin", ErrSubscriptionPoolExhausted, "hmm_policy", pinEvictionReasonSubscriptionPool},
+		{"pool exhaustion evicts the pin", credentials.ErrSubscriptionPoolExhausted, "hmm_policy", pinEvictionReasonSubscriptionPool},
 		{"model denial evicts the pin", modelAccessError(), "hmm_policy", pinEvictionReasonSubscriptionModel},
 		{"healthy arm leaves the pin", nil, "hmm_policy", ""},
 		{"force-model pin is never evicted", modelAccessError(), translate.ReasonUserForceModel, ""},

@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"log/slog"
+	"weave-os/router/internal/routingpolicy"
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/dispatch"
@@ -11,6 +12,7 @@ import (
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/gitcontext"
+	"weave-os/router/internal/router/planner"
 	"weave-os/router/internal/telemetry"
 	"weave-os/router/internal/telemetry/turnrecord"
 )
@@ -44,7 +46,7 @@ func applyPolicyPinTelemetry(ctx context.Context, params *turnrecord.InsertTelem
 	params.PolicyPinHonoured = &honoured
 }
 
-func applyBlindExperimentTelemetry(ctx context.Context, params *turnrecord.InsertTelemetryParams, routed *turnLoopResult) {
+func applyBlindExperimentTelemetry(ctx context.Context, params *turnrecord.InsertTelemetryParams, routed *routingpolicy.TurnRoute) {
 	state, present := auth.BlindExperimentStatusFrom(ctx)
 	if params == nil || !present {
 		return
@@ -110,7 +112,7 @@ func applyBlindExperimentTelemetry(ctx context.Context, params *turnrecord.Inser
 	}
 }
 
-func applyPlannerTelemetry(p *turnrecord.InsertTelemetryParams, res turnLoopResult) {
+func applyPlannerTelemetry(p *turnrecord.InsertTelemetryParams, res routingpolicy.TurnRoute) {
 	if p == nil || !res.PlannerDecision.Evaluated() {
 		return
 	}
@@ -141,7 +143,7 @@ func applyEffortTelemetry(p *turnrecord.InsertTelemetryParams, e dispatch.Effort
 	p.EffortSource = e.Source
 }
 
-func applyAuthorityShadowTelemetry(p *turnrecord.InsertTelemetryParams, res turnLoopResult) {
+func applyAuthorityShadowTelemetry(p *turnrecord.InsertTelemetryParams, res routingpolicy.TurnRoute) {
 	if p == nil || !res.AuthorityShadow.Computed {
 		return
 	}
@@ -203,3 +205,5 @@ func NewAttemptSink(store telemetry.InferenceAttemptStore, logger *slog.Logger) 
 const DecisionReasonPolicyPinUnservable = router.PolicyPinUnavailableReason
 
 const DecisionReasonRoutingFailed = "routing_failed"
+
+func plannerOutcome(outcome planner.Outcome) string { return routingpolicy.PlannerOutcome(outcome) }

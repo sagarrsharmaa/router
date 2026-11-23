@@ -34,11 +34,11 @@ func fastModeCtx(models ...string) context.Context {
 
 func newFastModeService(decision router.Decision, upstream providers.Client) *Service {
 	telemetry := newBypassCaptureTelemetry()
-	svc := withHMMPorts(NewService(staticRouter{decision: decision}, map[string]providers.Client{
+	svc := withHMMPorts(NewService(staticRouter{decision: decision}, dispatch.NewClients(map[string]providers.Client{
 		providers.ProviderAnthropic:  upstream,
 		providers.ProviderOpenAI:     upstream,
 		providers.ProviderOpenRouter: upstream,
-	}, nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", telemetry))
+	}), nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", telemetry))
 
 	return svc
 }
@@ -57,9 +57,9 @@ func TestFastModeForAttempt(t *testing.T) {
 		assert.False(t, fastModeForAttempt(fastModeCtx("claude-sonnet-4-6"), "claude-sonnet-4-6", providers.ProviderAnthropic))
 	})
 	t.Run("off when the turn is served on a subscription", func(t *testing.T) {
-		ctx := context.WithValue(fastModeCtx(fastOpusModel), CredentialsContextKey{}, &Credentials{
+		ctx := context.WithValue(fastModeCtx(fastOpusModel), requestcontext.CredentialsContextKey{}, &requestcontext.Credentials{
 			APIKey: []byte("sk-ant-oat-token"),
-			Source: credSourceSubscription,
+			Source: requestcontext.SourceSubscription,
 			OAuth:  true,
 		})
 		assert.False(t, fastModeForAttempt(ctx, fastOpusModel, providers.ProviderAnthropic))
@@ -248,7 +248,7 @@ func TestOpenAIFormats_FastModeQuotaRejectionRetriesAtStandardSpeed(t *testing.T
 			var err error
 			if tc.format == translate.FormatOpenAIResponses {
 				body = []byte(`{"model":"auto","input":"hi"}`)
-				err = svc.ProxyOpenAIResponses(fastModeCtx(fastOpusModel), body, rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, routePathResponses, strings.NewReader("")))
+				err = svc.ProxyOpenAIResponses(fastModeCtx(fastOpusModel), body, rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, requestcontext.RoutePathResponses, strings.NewReader("")))
 			} else {
 				err = svc.ProxyOpenAIChatCompletion(fastModeCtx(fastOpusModel), body, rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/chat/completions", strings.NewReader("")))
 			}

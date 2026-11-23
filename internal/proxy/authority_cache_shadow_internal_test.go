@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"testing"
 	"time"
+	"weave-os/router/internal/routingpolicy"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/continuity"
@@ -65,7 +67,7 @@ func authorityShadowBasePin() sessionpin.Pin {
 
 // runAuthorityShadowTurn drives one authoritative-per-turn main-loop turn and
 // returns the turn loop's result.
-func runAuthorityShadowTurn(t *testing.T, enabled bool, fresh router.Decision) turnLoopResult {
+func runAuthorityShadowTurn(t *testing.T, enabled bool, fresh router.Decision) routingpolicy.TurnRoute {
 	t.Helper()
 	return runAuthorityShadowTurnWithPin(t, enabled, fresh, authorityShadowPin())
 }
@@ -75,14 +77,14 @@ func runAuthorityShadowTurnWithPin(
 	enabled bool,
 	fresh router.Decision,
 	pin sessionpin.Pin,
-) turnLoopResult {
+) routingpolicy.TurnRoute {
 	t.Helper()
 	strategy := router.Strategy("authority-cache-shadow-test")
 	store := newStubPinStore()
 	store.getFound = true
 	store.getPin = pin
 	svc := withHMMPorts(NewService(
-		nil, nil, nil, store, false,
+		nil, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		EditHMMConfig(func(c *hmm.Config) { c.AuthorityCacheShadow = enabled }).
 		EditContinuityConfig(func(c *continuity.Config) {
@@ -267,7 +269,7 @@ func TestAuthorityCacheShadowCandidateScoreCoverage(t *testing.T) {
 // expected savings, and clamping it to zero destroys the measurement.
 func TestApplyAuthorityShadowTelemetryPreservesSignedEV(t *testing.T) {
 	stay := 0.71
-	res := turnLoopResult{AuthorityShadow: authorityCacheShadow{
+	res := routingpolicy.TurnRoute{AuthorityShadow: routingpolicy.AuthorityCacheShadow{
 		Computed:     true,
 		StayModel:    shadowPinnedModel,
 		StayProvider: providers.ProviderAnthropic,

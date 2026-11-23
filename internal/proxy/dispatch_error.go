@@ -7,6 +7,8 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/billing"
+	"weave-os/router/internal/conversation"
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
@@ -44,36 +46,36 @@ func ClassifyDispatchError(err error) (ingress.DispatchErrorClass, bool) {
 		return refusalClass(ingress.DispatchErrorProductIneligible, refusal.ProductIneligible,
 			"This model is not included in your plan. Pick a model your plan covers.",
 			"warn", "Rejected request: model is not eligible for the caller's product"), true
-	case errors.Is(err, ErrSubscriptionClientAppRefused):
+	case errors.Is(err, credentials.ErrSubscriptionClientAppRefused):
 		return refusalClass(ingress.DispatchErrorSubscriptionClientAppRefused, refusal.SubscriptionClientAppRefused,
 			"Anthropic only lets Claude Code use Claude subscription plan limits, so this app can't use them for the forced Claude model. Use Claude Code, add extra usage at claude.ai/settings/usage, or pick a non-Claude model.",
 			"warn", "Rejected forced Claude turn: subscriptions refused third-party client"), true
-	case subscriptionLaneRefused(err):
+	case credentials.SubscriptionLaneRefused(err):
 		return subscriptionLaneRefusalClass(err), true
-	case errors.Is(err, ErrWeaveCreditsDisabled):
+	case errors.Is(err, credentials.ErrWeaveCreditsDisabled):
 		return refusalClass(ingress.DispatchErrorWeaveCreditsDisabled, refusal.WeaveCreditsDisabled,
 			"Weave credits are turned off for your organization, and none of your plans or provider API keys can serve this request. Connect a provider key or plan for this model, or allow Weave credits in settings.",
 			"warn", "Request refused: Weave credits disabled and no customer funding source"), true
-	case errors.Is(err, ErrClaudeEnterpriseSubscriptionUnavailable):
+	case errors.Is(err, credentials.ErrClaudeEnterpriseSubscriptionUnavailable):
 		return refusalClass(ingress.DispatchErrorClaudeEnterpriseOnly, refusal.ClaudeEnterpriseOnly,
 			"Claude Enterprise-only billing is enabled, but no usable Claude account can serve this request. Connect or reconnect a Claude account, or turn off Enterprise-only billing in settings.",
 			"warn", "Claude Enterprise-only request refused"), true
-	case errors.Is(err, ErrSubscriptionPoolExhausted):
+	case errors.Is(err, credentials.ErrSubscriptionPoolExhausted):
 		return refusalClass(ingress.DispatchErrorSubscriptionPoolExhausted, refusal.SubscriptionPoolExhausted,
 			"All enrolled subscription accounts are currently unavailable.",
 			"warn", "Subscription account pool exhausted"), true
-	case errors.Is(err, ErrSubscriptionPoolThrottled):
+	case errors.Is(err, credentials.ErrSubscriptionPoolThrottled):
 		return refusalClass(ingress.DispatchErrorSubscriptionPoolThrottled, refusal.SubscriptionPoolThrottled,
 			subscriptionPoolThrottledMessage,
 			"warn", "Subscription account pool throttled"), true
-	case errors.Is(err, ErrSubscriptionPoolUnavailable):
+	case errors.Is(err, credentials.ErrSubscriptionPoolUnavailable):
 		return refusalClass(ingress.DispatchErrorSubscriptionPoolUnavailable, refusal.SubscriptionPoolUnavailable,
 			"Subscription account service is temporarily unavailable.",
 			"error", "Subscription account pool unavailable"), true
-	case errors.Is(err, ErrHandoffInvalid):
-		return ingress.DispatchErrorClass{Kind: ingress.DispatchErrorHandoff, Status: http.StatusConflict, Message: handoffInvalidMessage, LogLevel: "warn", LogMessage: "Pi handoff rejected"}, true
-	case errors.Is(err, ErrHandoffUnavailable):
-		return ingress.DispatchErrorClass{Kind: ingress.DispatchErrorHandoff, Status: http.StatusServiceUnavailable, Message: handoffUnavailableMessage, LogLevel: "warn", LogMessage: "Pi handoff unavailable"}, true
+	case errors.Is(err, conversation.ErrHandoffInvalid):
+		return ingress.DispatchErrorClass{Kind: ingress.DispatchErrorHandoff, Status: http.StatusConflict, Message: conversation.HandoffInvalidMessage, LogLevel: "warn", LogMessage: "Pi handoff rejected"}, true
+	case errors.Is(err, conversation.ErrHandoffUnavailable):
+		return ingress.DispatchErrorClass{Kind: ingress.DispatchErrorHandoff, Status: http.StatusServiceUnavailable, Message: conversation.HandoffUnavailableMessage, LogLevel: "warn", LogMessage: "Pi handoff unavailable"}, true
 	case errors.As(err, &forcedExcluded):
 		return ingress.DispatchErrorClass{
 			Kind:       ingress.DispatchErrorForcedModelExcluded,
@@ -146,7 +148,7 @@ func ClassifyDispatchError(err error) (ingress.DispatchErrorClass, bool) {
 			Status:  http.StatusBadGateway,
 			Message: "Provider not configured.",
 		}, true
-	case errors.Is(err, ErrRequestNotJSONObject):
+	case errors.Is(err, ingress.ErrRequestNotJSONObject):
 		return ingress.DispatchErrorClass{
 			Kind:    ingress.DispatchErrorRequestNotJSONObject,
 			Status:  http.StatusBadRequest,
@@ -282,16 +284,16 @@ var allowancePlanNames = map[entitlement.Plan]string{
 	entitlement.PlanMax:   "Max",
 }
 
-func includedAllowanceSpentMessage(e *IncludedAllowanceSpentError) string {
+func includedAllowanceSpentMessage(e *credentials.IncludedAllowanceSpentError) string {
 	message := fmt.Sprintf("Your Weave router %s plan's %s allowance is used up and your subscription can't serve this turn (rate-limited, or the requested model isn't subscription-covered).",
 		allowancePlanNames[e.Window.Plan], allowanceWindowNames[e.Window.Kind])
 	if !e.Window.ResetsAt.IsZero() {
 		message += " Included usage resumes at " + e.Window.ResetsAt.UTC().Format("15:04 MST on Jan 2") + "."
 	}
-	if errors.Is(e.orgGate, ErrSpendCapSubscriptionUnavailable) {
+	if errors.Is(e.OrgGate, credentials.ErrSpendCapSubscriptionUnavailable) {
 		return message + " A Weave router spend cap blocks paid routing until then."
 	}
-	if errors.Is(e.orgGate, ErrSubscriptionUnavailableForTurn) {
+	if errors.Is(e.OrgGate, credentials.ErrSubscriptionUnavailableForTurn) {
 		return message
 	}
 	return message + " To keep routing until then, add credits: " + topUpURL

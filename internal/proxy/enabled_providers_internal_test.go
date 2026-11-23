@@ -22,12 +22,12 @@ import (
 // the inbound surface matches its own, or e.g. an Anthropic x-api-key could
 // leak to api.openai.com.
 func TestEnabledProvidersForRequest_PassthroughIsSurfaceScoped(t *testing.T) {
-	s := &Service{hmmServing: hmmPorts(),
+	s := &Service{strategyServing: hmmPorts(),
 		// Mimic selfhosted with no env keys, both passthrough-eligible.
-		clients: dispatch.NewClients(map[string]providers.Client{
+		engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic: nil,
 			providers.ProviderOpenAI:    nil,
-		}),
+		})),
 		credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}, PassthroughEligible: map[string]struct{}{
 			providers.ProviderAnthropic: {},
 			providers.ProviderOpenAI:    {},
@@ -61,11 +61,11 @@ func TestEnabledProvidersForRequest_PassthroughIsSurfaceScoped(t *testing.T) {
 // are wired — the single seam scorer, pins, and tier clamp all inherit from.
 func TestEnabledProvidersForRequest_ExcludedProvidersSubtracted(t *testing.T) {
 	makeService := func() *Service {
-		return &Service{hmmServing: hmmPorts(),
-			clients: dispatch.NewClients(map[string]providers.Client{
+		return &Service{strategyServing: hmmPorts(),
+			engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 				providers.ProviderAnthropic: nil,
 				providers.ProviderOpenAI:    nil,
-			}),
+			})),
 			credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 				providers.ProviderAnthropic: {},
 				providers.ProviderOpenAI:    {},
@@ -106,12 +106,12 @@ func TestEnabledProvidersForRequest_ExcludedProvidersSubtracted(t *testing.T) {
 // ErrNoEligibleProvider before any Claude turn runs.
 func TestEnabledProvidersForRequest_SubscriptionEnrollsAnthropic(t *testing.T) {
 	makeService := func() *Service {
-		return &Service{hmmServing: hmmPorts(),
+		return &Service{strategyServing: hmmPorts(),
 			credentials: credentials.Brokerage{BYOKOnly: true, KeyedProviders: map[string]struct{}{}, PassthroughEligible: map[string]struct{}{}},
-			clients: dispatch.NewClients(map[string]providers.Client{
+			engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 				providers.ProviderAnthropic: nil,
 				providers.ProviderOpenAI:    nil,
-			}),
+			})),
 		}
 	}
 	routerKeyed := func() context.Context {
@@ -168,12 +168,12 @@ func TestEnabledProvidersForRequest_SubscriptionEnrollsAnthropic(t *testing.T) {
 func TestEnabledProvidersForRequest_CodexSubscriptionEnrollsOpenAI(t *testing.T) {
 	const codexJWT = "eyJhbGciOiJSUzI1NiJ9.codex.sig"
 	makeService := func() *Service {
-		return &Service{hmmServing: hmmPorts(),
+		return &Service{strategyServing: hmmPorts(),
 			credentials: credentials.Brokerage{BYOKOnly: true, KeyedProviders: map[string]struct{}{}, PassthroughEligible: map[string]struct{}{}},
-			clients: dispatch.NewClients(map[string]providers.Client{
+			engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 				providers.ProviderAnthropic: nil,
 				providers.ProviderOpenAI:    nil,
-			}),
+			})),
 		}
 	}
 	routerKeyed := func() context.Context {
@@ -238,9 +238,9 @@ func TestExcludeCodexOAuthOnlyModels(t *testing.T) {
 	enabled := map[string]struct{}{providers.ProviderOpenAI: {}}
 
 	t.Run("OAuth-only excludes infrastructure OpenAI models", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(),
+		s := &Service{strategyServing: hmmPorts(),
 			credentials: credentials.Brokerage{BYOKOnly: true, KeyedProviders: map[string]struct{}{}, PassthroughEligible: map[string]struct{}{}},
-			clients:     dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil}),
+			engine:      dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil})),
 		}
 		got := s.excludeCodexOAuthOnlyModels(ctx, http.Header{}, enabled, nil)
 		assert.Contains(t, got, "gpt-5.4-nano")
@@ -250,9 +250,9 @@ func TestExcludeCodexOAuthOnlyModels(t *testing.T) {
 	})
 
 	t.Run("OpenAI BYOK keeps infrastructure models eligible", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(),
+		s := &Service{strategyServing: hmmPorts(),
 			credentials: credentials.Brokerage{BYOKOnly: true, KeyedProviders: map[string]struct{}{}, PassthroughEligible: map[string]struct{}{}},
-			clients:     dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil}),
+			engine:      dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil})),
 		}
 		byokCtx := context.WithValue(ctx, credentials.ExternalAPIKeysContextKey{}, []*auth.ExternalAPIKey{
 			{Provider: providers.ProviderOpenAI, Plaintext: []byte("sk-oai-byok")},
@@ -262,8 +262,8 @@ func TestExcludeCodexOAuthOnlyModels(t *testing.T) {
 	})
 
 	t.Run("subscription-only ignores infrastructure credentials", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(),
-			clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil}),
+		s := &Service{strategyServing: hmmPorts(),
+			engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil})),
 			credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 				providers.ProviderOpenAI: {},
 			}, PassthroughEligible: map[string]struct{}{}},
@@ -274,8 +274,8 @@ func TestExcludeCodexOAuthOnlyModels(t *testing.T) {
 	})
 
 	t.Run("subscription-only keeps models the customer's OpenAI key funds", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(),
-			clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil}),
+		s := &Service{strategyServing: hmmPorts(),
+			engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil})),
 			credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 				providers.ProviderOpenAI: {},
 			}, PassthroughEligible: map[string]struct{}{}},
@@ -288,8 +288,8 @@ func TestExcludeCodexOAuthOnlyModels(t *testing.T) {
 	})
 
 	t.Run("managed subscription excludes unsupported OpenAI models", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(),
-			clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil}),
+		s := &Service{strategyServing: hmmPorts(),
+			engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil})),
 			credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 				providers.ProviderOpenAI: {},
 			}, PassthroughEligible: map[string]struct{}{}},
@@ -305,11 +305,11 @@ func TestExcludeCodexOAuthOnlyModels(t *testing.T) {
 // TestEnabledProvidersForRequest_DeploymentKeyedStillCrossSurface confirms
 // env-keyed providers stay eligible regardless of surface.
 func TestEnabledProvidersForRequest_DeploymentKeyedStillCrossSurface(t *testing.T) {
-	s := &Service{hmmServing: hmmPorts(),
-		clients: dispatch.NewClients(map[string]providers.Client{
+	s := &Service{strategyServing: hmmPorts(),
+		engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic: nil,
 			providers.ProviderOpenAI:    nil,
-		}),
+		})),
 		credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 			providers.ProviderAnthropic: {},
 			providers.ProviderOpenAI:    {},
@@ -325,12 +325,12 @@ func TestEnabledProvidersForRequest_DeploymentKeyedStillCrossSurface(t *testing.
 // TestEnabledProvidersForRequest_GatewayKeyDisplacesVendors: a tenant's own
 // gateway is the exclusive upstream; no vendor may stay eligible.
 func TestEnabledProvidersForRequest_GatewayKeyDisplacesVendors(t *testing.T) {
-	s := &Service{hmmServing: hmmPorts(),
-		clients: dispatch.NewClients(map[string]providers.Client{
+	s := &Service{strategyServing: hmmPorts(),
+		engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic:        nil,
 			providers.ProviderOpenAI:           nil,
 			providers.ProviderAnthropicGateway: nil,
-		}),
+		})),
 		credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 			providers.ProviderAnthropic: {},
 			providers.ProviderOpenAI:    {},
@@ -346,11 +346,11 @@ func TestEnabledProvidersForRequest_GatewayKeyDisplacesVendors(t *testing.T) {
 }
 
 func TestEnabledProvidersForRequest_VendorByokKeyDoesNotDisplaceVendors(t *testing.T) {
-	s := &Service{hmmServing: hmmPorts(),
-		clients: dispatch.NewClients(map[string]providers.Client{
+	s := &Service{strategyServing: hmmPorts(),
+		engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic: nil,
 			providers.ProviderOpenAI:    nil,
-		}),
+		})),
 		credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{
 			providers.ProviderAnthropic: {},
 			providers.ProviderOpenAI:    {},
@@ -368,9 +368,9 @@ func TestEnabledProvidersForRequest_VendorByokKeyDoesNotDisplaceVendors(t *testi
 
 // Linked accounts must be eligible across harness surfaces without an API key.
 func TestEnabledProvidersForRequest_LinkedSubscriptions(t *testing.T) {
-	s := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{
+	s := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{
 		providers.ProviderAnthropic: &fakeClient{}, providers.ProviderOpenAI: &fakeClient{},
-	}), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}, BYOKOnly: true}}
+	})), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}, BYOKOnly: true}}
 	ctx := context.WithValue(routerKeyedCtx(), credentials.ManagedSubscriptionProvidersContextKey{}, map[auth.SubscriptionProvider]struct{}{
 		auth.SubscriptionProviderClaude: {}, auth.SubscriptionProviderCodex: {},
 	})
@@ -378,7 +378,7 @@ func TestEnabledProvidersForRequest_LinkedSubscriptions(t *testing.T) {
 		assert.Equal(t, map[string]struct{}{providers.ProviderAnthropic: {}, providers.ProviderOpenAI: {}}, s.enabledProvidersForRequest(ctx, providers.ProviderAnthropic, http.Header{}))
 	})
 	t.Run("API-only funding does not enroll linked accounts", func(t *testing.T) {
-		paid := context.WithValue(ctx, subscriptionAPIOnlyKey{}, true)
+		paid := context.WithValue(ctx, credentials.SubscriptionAPIOnlyKey{}, true)
 		assert.Empty(t, s.enabledProvidersForRequest(paid, providers.ProviderAnthropic, http.Header{}))
 	})
 	t.Run("disabled subscriptions do not enroll linked accounts", func(t *testing.T) {
@@ -386,7 +386,7 @@ func TestEnabledProvidersForRequest_LinkedSubscriptions(t *testing.T) {
 		assert.Empty(t, s.enabledProvidersForRequest(disabled, providers.ProviderAnthropic, http.Header{}))
 	})
 	t.Run("unsupported subscription transports stay unavailable", func(t *testing.T) {
-		unsupported := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderOpenAI: nil}), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}, BYOKOnly: true}}
+		unsupported := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderOpenAI: nil})), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}, BYOKOnly: true}}
 		assert.Empty(t, unsupported.enabledProvidersForRequest(ctx, providers.ProviderAnthropic, http.Header{}))
 	})
 	t.Run("Max funding cannot enroll subscriptions", func(t *testing.T) {
@@ -404,7 +404,7 @@ func TestEnabledProvidersForRequest_LinkedSubscriptions(t *testing.T) {
 		assert.Equal(t, map[string]struct{}{providers.ProviderAnthropic: {}}, s.enabledProvidersForRequest(excluded, providers.ProviderAnthropic, http.Header{}))
 	})
 	t.Run("chat endpoint cannot serve linked Codex", func(t *testing.T) {
-		chat := context.WithValue(ctx, codexChatEndpointContextKey{}, true)
+		chat := context.WithValue(ctx, credentials.CodexChatEndpointContextKey{}, true)
 		assert.NotContains(t, s.enabledProvidersForRequest(chat, providers.ProviderOpenAI, http.Header{}), providers.ProviderOpenAI)
 	})
 }

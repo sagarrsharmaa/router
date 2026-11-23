@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"weave-os/router/internal/conversation"
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router/hmm"
@@ -128,18 +130,18 @@ func TestClassifyFailureOwner_Cases(t *testing.T) {
 		{"upstream 404", failureOwnerInput{Err: &providers.UpstreamErrorResponse{Status: http.StatusNotFound}}, turnrecord.FailureOwnerRouter},
 		{"status argument wins over chain", failureOwnerInput{Err: errors.New("boom"), Status: http.StatusServiceUnavailable}, turnrecord.FailureOwnerProvider},
 		{"hmm outage", failureOwnerInput{Err: fmt.Errorf("route: %w", hmm.ErrHMMUnavailable)}, turnrecord.FailureOwnerRouter},
-		{"handoff unavailable", failureOwnerInput{Err: ErrHandoffUnavailable}, turnrecord.FailureOwnerRouter},
-		{"handoff invalid", failureOwnerInput{Err: ErrHandoffInvalid}, turnrecord.FailureOwnerClient},
+		{"handoff unavailable", failureOwnerInput{Err: conversation.ErrHandoffUnavailable}, turnrecord.FailureOwnerRouter},
+		{"handoff invalid", failureOwnerInput{Err: conversation.ErrHandoffInvalid}, turnrecord.FailureOwnerClient},
 		{"context overflow", failureOwnerInput{Err: &providers.UpstreamErrorResponse{Status: http.StatusBadRequest, Body: []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}`)}, BodyTranslated: true}, turnrecord.FailureOwnerClient},
-		{"subscription pool exhausted", failureOwnerInput{Err: fmt.Errorf("dispatch: %w", ErrSubscriptionPoolExhausted)}, turnrecord.FailureOwnerRouter},
-		{"subscription pool exhausted by an upstream 429 on every seat", failureOwnerInput{Err: errors.Join(ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusTooManyRequests, Body: []byte(`{"detail":"Rate limit exceeded"}`)})}, turnrecord.FailureOwnerProvider},
-		{"subscription pool exhausted after an upstream 401 stays router-owned", failureOwnerInput{Err: errors.Join(ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusUnauthorized})}, turnrecord.FailureOwnerRouter},
-		{"pool refused because every seat is in a provider rate-limit cooldown", failureOwnerInput{Err: fmt.Errorf("dispatch: %w", ErrSubscriptionPoolThrottled)}, turnrecord.FailureOwnerProvider},
-		{"pool unavailable for a non-throttle reason stays router-owned", failureOwnerInput{Err: ErrSubscriptionPoolUnavailable}, turnrecord.FailureOwnerRouter},
+		{"subscription pool exhausted", failureOwnerInput{Err: fmt.Errorf("dispatch: %w", credentials.ErrSubscriptionPoolExhausted)}, turnrecord.FailureOwnerRouter},
+		{"subscription pool exhausted by an upstream 429 on every seat", failureOwnerInput{Err: errors.Join(credentials.ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusTooManyRequests, Body: []byte(`{"detail":"Rate limit exceeded"}`)})}, turnrecord.FailureOwnerProvider},
+		{"subscription pool exhausted after an upstream 401 stays router-owned", failureOwnerInput{Err: errors.Join(credentials.ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusUnauthorized})}, turnrecord.FailureOwnerRouter},
+		{"pool refused because every seat is in a provider rate-limit cooldown", failureOwnerInput{Err: fmt.Errorf("dispatch: %w", credentials.ErrSubscriptionPoolThrottled)}, turnrecord.FailureOwnerProvider},
+		{"pool unavailable for a non-throttle reason stays router-owned", failureOwnerInput{Err: credentials.ErrSubscriptionPoolUnavailable}, turnrecord.FailureOwnerRouter},
 		{"customer key over its own usage limit on a translated body", failureOwnerInput{Err: &providers.UpstreamErrorResponse{Status: http.StatusBadRequest, Rejection: providers.UpstreamRejection{Kind: providers.UpstreamRejectionCredential}}, BodyTranslated: true, CustomerCredential: true}, turnrecord.FailureOwnerClient},
 		{"deployment key over its usage limit stays router-owned", failureOwnerInput{Err: &providers.UpstreamErrorResponse{Status: http.StatusBadRequest, Rejection: providers.UpstreamRejection{Kind: providers.UpstreamRejectionCredential}}, BodyTranslated: true}, turnrecord.FailureOwnerRouter},
 		{"translated body rejected for a field the client sent unchanged", failureOwnerInput{Err: &providers.UpstreamErrorResponse{Status: http.StatusBadRequest}, BodyTranslated: true, RejectedFieldUnchanged: true}, turnrecord.FailureOwnerClient},
-		{"spend-cap lane refusal outranks the last seat's 429", failureOwnerInput{Err: errors.Join(ErrSpendCapSubscriptionUnavailable, ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusTooManyRequests})}, turnrecord.FailureOwnerClient},
+		{"spend-cap lane refusal outranks the last seat's 429", failureOwnerInput{Err: errors.Join(credentials.ErrSpendCapSubscriptionUnavailable, credentials.ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusTooManyRequests})}, turnrecord.FailureOwnerClient},
 		{"responses passthrough cannot switch format", failureOwnerInput{Err: errResponsesPassthroughStuck}, turnrecord.FailureOwnerRouter},
 		{"malformed custom tool arguments", failureOwnerInput{Err: fmt.Errorf("write: %w", translate.ErrCustomToolArguments), BodyTranslated: true}, turnrecord.FailureOwnerProvider},
 		{"http/2 connection lost to the provider", failureOwnerInput{Err: http2LostPing()}, turnrecord.FailureOwnerProvider},

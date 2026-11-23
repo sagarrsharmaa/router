@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/flags"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
@@ -23,7 +24,7 @@ const autonomyGateBody = `{
 }`
 
 func newAutonomyGateService() *Service {
-	return withHMMPorts(NewService(nil, map[string]providers.Client{}, nil, nil,
+	return withHMMPorts(NewService(nil, dispatch.NewClients(map[string]providers.Client{}), nil, nil,
 		false, providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 }
@@ -51,11 +52,13 @@ func TestAutonomySystemAppendApplies_GateAndTurnType(t *testing.T) {
 		assert.False(t, svc.autonomySystemAppendApplies(autonomyGateCtx(false, requestcontext.ClientAppClaudeCode), []byte(autonomyGateBody), env, turntype.MainLoop))
 	})
 	t.Run("deployment default on fires without an org override", func(t *testing.T) {
-		on := newAutonomyGateService().WithCCAutonomySystemAppend(true)
+		on := newAutonomyGateService()
+		on.ingress.CCAutonomySystemAppend = true
 		assert.True(t, on.autonomySystemAppendApplies(autonomyGateCtx(false, requestcontext.ClientAppClaudeCode), []byte(autonomyGateBody), env, turntype.MainLoop))
 	})
 	t.Run("org override turns a default-on deployment off", func(t *testing.T) {
-		on := newAutonomyGateService().WithCCAutonomySystemAppend(true)
+		on := newAutonomyGateService()
+		on.ingress.CCAutonomySystemAppend = true
 		off := flags.WithOverrides(autonomyGateCtx(false, requestcontext.ClientAppClaudeCode), flags.Overrides{Bools: map[flags.Key]bool{flags.KeyCCAutonomySystemAppend: false}})
 		assert.False(t, on.autonomySystemAppendApplies(off, []byte(autonomyGateBody), env, turntype.MainLoop))
 	})

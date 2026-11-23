@@ -6,10 +6,13 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"weave-os/router/internal/routingpolicy"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
+	"weave-os/router/internal/router/hmm"
 	"weave-os/router/internal/router/sessionpin"
 	"weave-os/router/internal/translate"
 
@@ -178,7 +181,7 @@ func TestRunTurnLoop_ForceModelSessionPinAppliesAcrossChildThreads(t *testing.T)
 		LastOutputLimitAt: endedAt,
 	}
 	freshRouter := &tierProbeRouter{available: map[string]struct{}{"claude-haiku-4-5": {}}}
-	svc := withHMMPorts(NewService(freshRouter, nil, nil, store, false,
+	svc := withHMMPorts(NewService(freshRouter, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	features := child.RoutingFeatures()
@@ -240,15 +243,15 @@ func TestRunTurnLoop_DroppedSessionForcePreservesThreadPin(t *testing.T) {
 		Strategy:       router.StrategyHMMEmbedding,
 		PinnedUntil:    time.Now().Add(time.Hour),
 	}
-	store.pins[forceModelMapKey(threadKey, hmmHistoryRole(role))] = sessionpin.Pin{
+	store.pins[forceModelMapKey(threadKey, hmm.HistoryRole(role))] = sessionpin.Pin{
 		SessionKey: threadKey,
-		Role:       hmmHistoryRole(role),
+		Role:       hmm.HistoryRole(role),
 		DemotionCooldowns: map[string]time.Time{
 			catalog.ModelGPT6Luna: time.Now().Add(-time.Minute),
 		},
 	}
 	freshRouter := &tierProbeRouter{available: map[string]struct{}{"claude-haiku-4-5": {}}}
-	svc := withHMMPorts(NewService(freshRouter, nil, nil, store, false,
+	svc := withHMMPorts(NewService(freshRouter, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	svc.WithTransientRateLimit(true, 45)
@@ -302,7 +305,7 @@ func TestRunTurnLoop_ClearTombstoneBlocksLegacyForce(t *testing.T) {
 	freshRouter := &tierProbeRouter{
 		available: map[string]struct{}{"claude-haiku-4-5": {}},
 	}
-	svc := withHMMPorts(NewService(freshRouter, nil, nil, store, false,
+	svc := withHMMPorts(NewService(freshRouter, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	result, err := svc.runTurnLoop(ctx, env, features, testTurnRequest(ctx, apiKeyID, installationID), "", nil, router.Request{
@@ -339,7 +342,7 @@ func TestRunTurnLoop_SessionForceOverridesAuxiliaryHardPin(t *testing.T) {
 		PinnedUntil:    pinNeverExpires,
 	}
 	freshRouter := &tierProbeRouter{available: map[string]struct{}{"claude-haiku-4-5": {}}}
-	svc := withHMMPorts(NewService(freshRouter, nil, nil, store, false,
+	svc := withHMMPorts(NewService(freshRouter, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	features := env.RoutingFeatures()
@@ -372,7 +375,7 @@ func TestApplyForceModelCommand_FableThenAstraWritesAndClearsSessionControl(t *t
 	threadKey := deriveSessionKeyForRequest(ctx, env, apiKeyID)
 	forceKey := deriveForceModelSessionKeyForRequest(ctx, env, apiKeyID, threadKey)
 	store := newForceModelMapStore()
-	svc := withHMMPorts(NewService(nil, nil, nil, store, false,
+	svc := withHMMPorts(NewService(nil, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	forcedModel, _, err := (forceModelCommands{svc}).apply(ctx, router.StrategyFromContext(ctx), translate.ForceModelResult{Model: "fable"}, installationID, threadKey, forceKey)
@@ -414,7 +417,7 @@ func TestApplyForceModelCommand_FableThenAstraWritesAndClearsSessionControl(t *t
 
 func TestRecordTurnUsage_ForcedDecisionWritesThreadHistoryOnly(t *testing.T) {
 	store := newForceModelMapStore()
-	svc := withHMMPorts(NewService(nil, nil, nil, store, false,
+	svc := withHMMPorts(NewService(nil, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	threadKey := [sessionpin.SessionKeyLen]byte{1}
@@ -432,7 +435,7 @@ func TestRecordTurnUsage_ForcedDecisionWritesThreadHistoryOnly(t *testing.T) {
 		Role:       forceModelHistoryRole(role),
 	}
 
-	svc.recordTurnUsage(context.Background(), turnLoopResult{
+	svc.recordTurnUsage(context.Background(), routingpolicy.TurnRoute{
 		SessionKey: threadKey,
 		PinRole:    role,
 		Decision: router.Decision{

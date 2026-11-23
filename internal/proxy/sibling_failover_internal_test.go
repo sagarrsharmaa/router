@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 	"time"
+	"weave-os/router/internal/routingpolicy"
 
 	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/requestcontext"
@@ -19,7 +20,7 @@ import (
 )
 
 func siblingService(keyed ...string) *Service {
-	s := &Service{hmmServing: hmmPorts(), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}}}
+	s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{}}}
 	for _, p := range keyed {
 		s.credentials.KeyedProviders[p] = struct{}{}
 	}
@@ -70,7 +71,7 @@ func TestSiblingFailoverSelectsImageCompatibleBinding(t *testing.T) {
 		{name: "within DeepInfra cap", imageCount: 3, wantProvider: providers.ProviderDeepInfra},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := withRequestImageCount(context.Background(), tc.imageCount)
+			ctx := requestcontext.WithRequestImageCount(context.Background(), tc.imageCount)
 			got, ok := firstSibling(s, ctx, failed, 1_000, 0)
 			require.True(t, ok)
 			assert.Equal(t, model, got.Model)
@@ -136,7 +137,7 @@ func TestRescueBasisForTurnKeepsHeldPrimaryIdentity(t *testing.T) {
 		SelectedArmID:       "fresh-arm",
 		SelectedRosterArmID: "fresh-arm:high",
 	}
-	turn := turnLoopResult{StickyHit: true, Fresh: router.Decision{Model: "claude-opus-5-5", Metadata: fresh}}
+	turn := routingpolicy.TurnRoute{StickyHit: true, Fresh: router.Decision{Model: "claude-opus-5-5", Metadata: fresh}}
 
 	basis := rescueBasisForTurn(primary, rescueTurnOf(turn))
 
@@ -147,7 +148,7 @@ func TestRescueBasisForTurnKeepsHeldPrimaryIdentity(t *testing.T) {
 	assert.NotSame(t, fresh, basis.Metadata)
 	assert.Equal(t, []string{"claude-opus-5-5"}, basis.Metadata.RescueModels, "the held pin must retain eligible rescue models")
 	assert.Equal(t, []string{"claude-opus-5-5"}, fresh.RescueModels, "fresh policy metadata must remain unchanged")
-	assert.Nil(t, rescueBasisForTurn(primary, rescueTurnOf(turnLoopResult{Fresh: turn.Fresh})).Metadata)
+	assert.Nil(t, rescueBasisForTurn(primary, rescueTurnOf(routingpolicy.TurnRoute{Fresh: turn.Fresh})).Metadata)
 	turn.HardPinned = true
 	assert.Nil(t, rescueBasisForTurn(primary, rescueTurnOf(turn)).Metadata)
 }
@@ -162,7 +163,7 @@ func TestRescueBasisForHeldPinPreservesTierAndPolicyOrder(t *testing.T) {
 		},
 		PairedModel: "claude-haiku-4-5",
 	}
-	turn := turnLoopResult{
+	turn := routingpolicy.TurnRoute{
 		StickyHit: true,
 		Fresh:     router.Decision{Model: "claude-sonnet-5", Metadata: freshMetadata},
 	}
@@ -319,7 +320,7 @@ func TestSiblingFailoverDecision(t *testing.T) {
 	})
 
 	t.Run("gateway BYOK rescues via a sibling behind a held gateway key", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts()}
+		s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}
 		gwCtx := context.WithValue(ctx, credentials.ExternalAPIKeysContextKey{}, []*auth.ExternalAPIKey{
 			{
 				Provider:     providers.ProviderOpenAIGateway,
@@ -348,7 +349,7 @@ func TestSiblingFailoverDecision(t *testing.T) {
 	})
 
 	t.Run("gateway BYOK walks the ranked fallback before other gateway aliases", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts()}
+		s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}
 		gwCtx := context.WithValue(ctx, credentials.ExternalAPIKeysContextKey{}, []*auth.ExternalAPIKey{
 			{
 				Provider:     providers.ProviderOpenAIGateway,
@@ -375,7 +376,7 @@ func TestSiblingFailoverDecision(t *testing.T) {
 	})
 
 	t.Run("gateway BYOK never rescues onto a provider without a held gateway key", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{providers.ProviderAnthropic: {}}}}
+		s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{providers.ProviderAnthropic: {}}}}
 		gwCtx := context.WithValue(ctx, credentials.ExternalAPIKeysContextKey{}, []*auth.ExternalAPIKey{
 			{
 				Provider:     providers.ProviderOpenAIGateway,
@@ -398,7 +399,7 @@ func TestSiblingFailoverDecision(t *testing.T) {
 	})
 
 	t.Run("gateway BYOK rescues on the same gateway when it aliases a sibling", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts()}
+		s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}
 		gwCtx := context.WithValue(ctx, credentials.ExternalAPIKeysContextKey{}, []*auth.ExternalAPIKey{
 			{
 				Provider:     providers.ProviderOpenAIGateway,
@@ -424,7 +425,7 @@ func TestSiblingFailoverDecision(t *testing.T) {
 		_, ok := firstSibling(s, ctx, overloadedDecision(nil), 1_000, 0)
 		assert.False(t, ok)
 
-		legacy := &Service{hmmServing: hmmPorts()}
+		legacy := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}
 		_, ok = firstSibling(legacy, ctx, overloadedDecision(&router.RoutingMetadata{
 			CandidateModels: []string{"claude-sonnet-5"},
 		}), 1_000, 0)
@@ -458,7 +459,7 @@ func TestSiblingFailover_RosterOrderBeatsProviderPreferenceAndExcludesUnlistedMo
 // eligible or cooling candidate left, the session-lifetime demotion is
 // lifted for the walk, and the arm that just failed is never re-served.
 func TestGatewayRescueDecisions_AllArmsStruckOutReadmitsDemotedSibling(t *testing.T) {
-	s := &Service{hmmServing: hmmPorts()}
+	s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}
 	ctx := context.WithValue(context.Background(), credentials.ExternalAPIKeysContextKey{}, []*auth.ExternalAPIKey{
 		{Provider: providers.ProviderOpenAIGateway, Plaintext: []byte("pat"), ModelAliases: map[string]string{catalog.ModelGPT6Luna: catalog.ModelGPT6Luna}},
 		{Provider: providers.ProviderAnthropicGateway, Plaintext: []byte("pat"), ModelAliases: map[string]string{"claude-opus-5-5": "claude-opus-5-5"}},

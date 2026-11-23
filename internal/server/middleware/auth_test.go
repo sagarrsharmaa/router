@@ -14,10 +14,10 @@ import (
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/flags"
-	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/server/middleware"
+	"weave-os/router/internal/telemetry/capture"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -295,7 +295,7 @@ func TestWithAuthPropagatesContentCaptureOverride(t *testing.T) {
 	engine.GET("/probe", func(c *gin.Context) {
 		// Without this the proxy only ever sees the deployment-wide mode, and
 		// an installation that asked for no retention still gets captured.
-		assert.Equal(t, proxy.CaptureOff, c.Request.Context().Value(requestcontext.InstallationCaptureModeContextKey{}))
+		assert.Equal(t, capture.Off, c.Request.Context().Value(requestcontext.InstallationCaptureModeContextKey{}))
 		c.Status(http.StatusOK)
 	})
 
@@ -490,7 +490,7 @@ func TestWithAuthSnapshotsForwardedClientHeaders(t *testing.T) {
 	engine.GET("/probe", func(c *gin.Context) {
 		// Router-built upstream calls (compaction summaries, Cortex web
 		// search) have no inbound request to read these off later.
-		snapshot := proxy.ForwardedHeaderSnapshotFrom(c.Request.Context())
+		snapshot := requestcontext.ForwardedHeaderSnapshotFrom(c.Request.Context())
 		assert.Equal(t, "cortex-cli/1.2.3", snapshot.Get("X-SNOWFLAKE-APPLICATION"))
 		assert.Equal(t, `{"deployment":"prod"}`, snapshot.Get("X-SNOWFLAKE-BAGGAGE"))
 		assert.Empty(t, snapshot.Get("Authorization"),

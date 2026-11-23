@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
+	"weave-os/router/internal/router/hmm"
 	"weave-os/router/internal/router/sessionpin"
 	"weave-os/router/internal/translate"
 
@@ -92,7 +94,7 @@ func (s *overloadStubPinStore) SweepExpired(context.Context) error { return nil 
 func newOverloadTestService(store *overloadStubPinStore) *Service {
 	return withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -149,7 +151,7 @@ func TestMaybeDisableProviderAfterOverload_SecondStrikeDisablesAndEvicts(t *test
 	assert.Equal(t, sessionpin.DefaultRole, expired.Role)
 	assert.Equal(t, installationID, expired.InstallationID)
 	// Second upsert is the HMM history row.
-	assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), store.upserts[1].Role, "must expire the _hmm_history row too")
+	assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), store.upserts[1].Role, "must expire the _hmm_history row too")
 	assert.Empty(t, expired.Provider, "expired pin must clear provider so loadPin discards it")
 	assert.Empty(t, expired.Model, "expired pin must clear model so loadPin discards it")
 	assert.True(t, expired.PinnedUntil.Before(time.Now()),

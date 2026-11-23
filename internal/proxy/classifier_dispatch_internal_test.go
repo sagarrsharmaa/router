@@ -14,6 +14,7 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
@@ -84,7 +85,7 @@ func TestClassifierDispatchAcrossProtocols(t *testing.T) {
 			})
 			upstream := &classifierResponseProvider{}
 			baseline := &betaTestRouter{}
-			svc := withHMMPorts(NewService(baseline, map[string]providers.Client{test.provider: upstream}, nil, nil, false, test.provider, test.model, nil))
+			svc := withHMMPorts(NewService(baseline, dispatch.NewClients(map[string]providers.Client{test.provider: upstream}), nil, nil, false, test.provider, test.model, nil))
 			require.NoError(t, svc.WithClassifierSessions(fixtureService.classifierSessions.config, store, fixtureService.classifierSessions.classifier))
 			escalationClasses := []string{string(escalation.Low), string(escalation.Medium), string(escalation.High), string(escalation.Maximum)}
 			roster := &rosterdata.Roster{SchemaVersion: rosterdata.SchemaVersionPolicyV1, SHA256: strings.Repeat("b", 64), ClassOrder: escalationClasses, Clusters: map[string]rosterdata.Cluster{}}
@@ -169,7 +170,7 @@ func TestClassifierDispatchUsesConfiguredSubscriptionState(t *testing.T) {
 	const model = "claude-sonnet-4-6"
 	fixtureService, principal, store := classifierSessionFixture(t, classifierMedium)
 	upstream := &classifierResponseProvider{}
-	svc := withHMMPorts(NewService(nil, map[string]providers.Client{providers.ProviderAnthropic: upstream}, nil, nil, false, "", "", nil))
+	svc := withHMMPorts(NewService(nil, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: upstream}), nil, nil, false, "", "", nil))
 	require.NoError(t, svc.WithClassifierSessions(fixtureService.classifierSessions.config, store, fixtureService.classifierSessions.classifier))
 	ctx := classifierAdmit(t, svc, principal)
 	ctx = context.WithValue(ctx, requestcontext.InstallationSubscriptionModelsWhenActiveContextKey{}, []string{model})
@@ -198,7 +199,7 @@ func TestClassifierRecapServesWithoutAnchoringPin(t *testing.T) {
 	fixtureService, principal, store := classifierSessionFixture(t, classifierMedium)
 	upstream := &classifierResponseProvider{}
 	pins := newStubPinStore()
-	svc := withHMMPorts(NewService(&betaTestRouter{}, map[string]providers.Client{providers.ProviderAnthropic: upstream}, nil, pins, false, providers.ProviderAnthropic, model, nil))
+	svc := withHMMPorts(NewService(&betaTestRouter{}, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: upstream}), nil, pins, false, providers.ProviderAnthropic, model, nil))
 	require.NoError(t, svc.WithClassifierSessions(fixtureService.classifierSessions.config, store, fixtureService.classifierSessions.classifier))
 	escalationClasses := []string{string(escalation.Low), string(escalation.Medium), string(escalation.High), string(escalation.Maximum)}
 	roster := &rosterdata.Roster{SchemaVersion: rosterdata.SchemaVersionPolicyV1, SHA256: strings.Repeat("b", 64), ClassOrder: escalationClasses, Clusters: map[string]rosterdata.Cluster{}}
@@ -243,7 +244,7 @@ func TestClassifierInputRejectsControlBypasses(t *testing.T) {
 		`{"messages":[{"role":"user","content":"first"}],"weave_handoff":"ticket"}`,
 		`{"messages":[{"role":"user","content":"first"}],"weave_session":"ticket"}`,
 	} {
-		_, err := svc.withClassifierInput(ctx, []byte(body), router.EndpointAnthropicMessages)
+		_, err := svc.withClassifierInput(ctx, router.StrategyFromContext(ctx), []byte(body), router.EndpointAnthropicMessages)
 		require.Error(t, err, gjson.Get(body, "messages.0.content").String())
 	}
 	for _, command := range []string{"/beta", "/force-model example", "/router-session", "/router-models"} {
@@ -255,7 +256,7 @@ func TestClassifierInputRejectsControlBypasses(t *testing.T) {
 		context.WithValue(ctx, requestcontext.AgentShadowEvalContextKey{}, requestcontext.AgentShadowEvaluation{Model: catalog.ModelIDGPT55.String(), RolloutID: "fixture", StateID: "fixture"}),
 		router.WithPolicyPinRequest(ctx, router.PolicyPinRequest{Authorized: true, Pin: router.PolicyPin{ArtifactSHA256: strings.Repeat("a", 64), RosterSHA256: strings.Repeat("b", 64)}}),
 	} {
-		_, err := svc.withClassifierInput(override, []byte(`{"messages":[{"role":"user","content":"first"}]}`), router.EndpointAnthropicMessages)
+		_, err := svc.withClassifierInput(override, router.StrategyFromContext(override), []byte(`{"messages":[{"role":"user","content":"first"}]}`), router.EndpointAnthropicMessages)
 		require.ErrorIs(t, err, router.ErrClassifierThreadInvalid)
 	}
 }
@@ -266,7 +267,7 @@ func TestClassifierUtilityRequestsDoNotEstablishThreadRoot(t *testing.T) {
 	upstream := &classifierResponseProvider{}
 	baseline := &betaTestRouter{}
 	pins := newStubPinStore()
-	svc := withHMMPorts(NewService(baseline, map[string]providers.Client{providers.ProviderAnthropic: upstream}, nil, pins, false, providers.ProviderAnthropic, utilityModel.String(), nil))
+	svc := withHMMPorts(NewService(baseline, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: upstream}), nil, pins, false, providers.ProviderAnthropic, utilityModel.String(), nil))
 	require.NoError(t, svc.WithClassifierSessions(fixture.classifierSessions.config, store, fixture.classifierSessions.classifier))
 	ctx := classifierAdmit(t, svc, principal)
 	for _, utility := range []struct {

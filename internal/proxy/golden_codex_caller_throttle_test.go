@@ -15,10 +15,10 @@ import (
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/credentials/usage"
 	"weave-os/router/internal/flags"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
-	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/subscriptions"
@@ -61,8 +61,8 @@ func goldenCallerCodexSeatsCtx(seats ...*auth.SubscriptionAccount) func(context.
 		ctx = billing.WithSubscriptionOnly(ctx, billing.SubscriptionOnlyLinkedFirst)
 		ctx = requestcontext.WithClientIdentity(ctx, requestcontext.ClientIdentity{ClientApp: requestcontext.ClientAppCodex, SessionID: "golden-codex-session"})
 		ctx = proxy.WithSubscriptionStateModels(ctx, []string{goldenCodexModel}, []string{goldenCodexModel})
-		ctx = proxy.WithManagedSubscriptionCandidates(ctx, seats)
-		return proxy.WithManagedSubscriptionUsage(ctx)
+		ctx = credentials.WithManagedSubscriptionCandidates(ctx, seats)
+		return credentials.WithManagedSubscriptionUsage(ctx)
 	}
 }
 

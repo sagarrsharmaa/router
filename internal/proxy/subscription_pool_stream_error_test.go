@@ -12,6 +12,8 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/billing"
+	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
@@ -35,7 +37,7 @@ func TestProxyMessages_ManagedPoolStreamingFailureLeavesRenderingToHandler(t *te
 			Model:    "claude-opus-4-8",
 			Metadata: &router.RoutingMetadata{CandidateModels: []string{"claude-opus-4-8"}},
 		}},
-		map[string]providers.Client{providers.ProviderAnthropic: anthropic},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: anthropic}),
 		nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithManagedSubscriptions(leaser).
 		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
@@ -49,7 +51,7 @@ func TestProxyMessages_ManagedPoolStreamingFailureLeavesRenderingToHandler(t *te
 
 	err := svc.ProxyMessages(ctx, body, rec, req)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted,
+	require.ErrorIs(t, err, credentials.ErrSubscriptionPoolExhausted,
 		"the pool sentinel must survive for the handler to classify and log")
 	var upstreamErr *providers.UpstreamErrorResponse
 	require.ErrorAs(t, err, &upstreamErr)
@@ -76,7 +78,7 @@ func TestProxyMessages_ManagedPoolFailureBeforeAnyBytesLeavesRenderingToHandler(
 			Model:    "claude-opus-4-8",
 			Metadata: &router.RoutingMetadata{CandidateModels: []string{"claude-opus-4-8"}},
 		}},
-		map[string]providers.Client{providers.ProviderAnthropic: anthropic},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: anthropic}),
 		nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithManagedSubscriptions(leaser).
 		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
@@ -90,7 +92,7 @@ func TestProxyMessages_ManagedPoolFailureBeforeAnyBytesLeavesRenderingToHandler(
 
 	err := svc.ProxyMessages(ctx, body, rec, req)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
+	require.ErrorIs(t, err, credentials.ErrSubscriptionPoolExhausted)
 	var upstreamErr *providers.UpstreamErrorResponse
 	require.ErrorAs(t, err, &upstreamErr)
 	require.Equal(t, http.StatusTooManyRequests, upstreamErr.Status)

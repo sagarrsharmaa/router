@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"weave-os/router/internal/auth"
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router/catalog"
@@ -47,7 +48,7 @@ func TestPoolExhaustionOwnerFollowsLinkedSeatState(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			svc := newServiceWithProviders(t, nil).WithManagedSubscriptions(&scriptedSubscriptionLeaser{})
 			svc.clock = func() time.Time { return now }
-			ctx := WithManagedSubscriptionCandidates(managedSubscriptionTestContext(), scenario.seats)
+			ctx := credentials.WithManagedSubscriptionCandidates(managedSubscriptionTestContext(), scenario.seats)
 			if scenario.overage {
 				ctx = requestcontext.WithSubscriptionExtraUsage(ctx)
 			}
@@ -55,7 +56,7 @@ func TestPoolExhaustionOwnerFollowsLinkedSeatState(t *testing.T) {
 			_, _, managed, err := svc.leaseManagedSubscription(ctx, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String())
 
 			require.True(t, managed)
-			require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
+			require.ErrorIs(t, err, credentials.ErrSubscriptionPoolExhausted)
 			assert.Equal(t, scenario.owner, classifyFailureOwner(failureOwnerInput{Err: err}))
 		})
 	}

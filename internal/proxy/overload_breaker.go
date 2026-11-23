@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"weave-os/router/internal/requestcontext"
+	"weave-os/router/internal/routingpolicy"
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/dispatch"
@@ -11,17 +13,12 @@ import (
 	"github.com/google/uuid"
 )
 
-func (s *Service) WithProviderOverloaded(enabled bool, registry *breaker.Registry) *Service {
-	s.throttling.Overload = dispatch.NewOverloadBreaker(enabled, registry)
-	return s
-}
-
 func (s *Service) overloadOpenModels(ctx context.Context) map[string]struct{} {
 	return s.throttling.Overload.OpenModels(ctx, overloadOrg(ctx))
 }
 
 func overloadOrg(ctx context.Context) string {
-	if id := installationIDFromContext(ctx); id != uuid.Nil {
+	if id := requestcontext.InstallationIDFromContext(ctx); id != uuid.Nil {
 		return id.String()
 	}
 	return ""
@@ -42,7 +39,7 @@ func (s *Service) claimOverloadProbe(ctx context.Context, req router.Request) (b
 	})
 }
 
-func (s *Service) withTurnOverloadProbe(ctx context.Context, res turnLoopResult) context.Context {
+func (s *Service) withTurnOverloadProbe(ctx context.Context, res routingpolicy.TurnRoute) context.Context {
 	if res.OverloadProbe == nil {
 		return ctx
 	}

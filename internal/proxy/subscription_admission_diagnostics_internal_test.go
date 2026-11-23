@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"weave-os/router/internal/auth"
+	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/credentials/usage"
 	"weave-os/router/internal/observability"
 	"weave-os/router/internal/providers"
-	"weave-os/router/internal/proxy/usage"
+	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router/catalog"
 	"weave-os/router/internal/subscriptions"
 
@@ -44,7 +46,7 @@ func TestSubscriptionAdmissionReportsSkipGateAndPreservesRotation(t *testing.T) 
 			return ctx
 		}},
 		{name: "client restriction", reason: subscriptionSkipClientAppDenied, configure: func(s *Service, ctx context.Context, _ *scriptedSubscriptionLeaser) context.Context {
-			s.credentials.SubscriptionModels.DenyManagedClientApp("skipped", providers.ProviderAnthropic, ClientIdentityFrom(ctx).ClientApp, now.Add(time.Minute))
+			s.credentials.SubscriptionModels.DenyManagedClientApp("skipped", providers.ProviderAnthropic, requestcontext.ClientIdentityFrom(ctx).ClientApp, now.Add(time.Minute))
 			return ctx
 		}},
 		{name: "plan", reason: subscriptionSkipPlanIneligible, configure: func(_ *Service, ctx context.Context, l *scriptedSubscriptionLeaser) context.Context {
@@ -53,7 +55,7 @@ func TestSubscriptionAdmissionReportsSkipGateAndPreservesRotation(t *testing.T) 
 			return ctx
 		}},
 		{name: "admission snapshot", reason: subscriptionSkipOutsideAdmission, configure: func(_ *Service, ctx context.Context, _ *scriptedSubscriptionLeaser) context.Context {
-			return WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "winner", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
+			return credentials.WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "winner", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 		}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -117,7 +119,7 @@ func TestSubscriptionAdmissionBoundsSkippedAccountsAndOmitsUnknownModel(t *testi
 	svc := newServiceWithProviders(t, nil).WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: leases}).WithUsageObserver(observerWithSnapshot("private-access-token", usage.Snapshot{OverageInUse: true}))
 	ctx := observability.WithLogger(managedSubscriptionTestContext(), slog.New(slog.NewJSONHandler(&output, nil)))
 	_, lease, managed, err := svc.leaseManagedSubscription(ctx, providers.ProviderAnthropic, "caller-controlled-secret")
-	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
+	require.ErrorIs(t, err, credentials.ErrSubscriptionPoolExhausted)
 	require.True(t, managed)
 	require.Empty(t, lease.AccountID)
 	var event struct {
@@ -157,7 +159,7 @@ func TestSubscriptionAdmissionReportsRepeatedLeaseWithoutLooping(t *testing.T) {
 	svc := newServiceWithProviders(t, nil).WithManagedSubscriptions(leaser).WithUsageObserver(observerWithSnapshot("private-access-token", usage.Snapshot{OverageInUse: true}))
 	ctx := observability.WithLogger(managedSubscriptionTestContext(), slog.New(slog.NewJSONHandler(&output, nil)))
 	_, lease, managed, err := svc.leaseManagedSubscription(ctx, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String())
-	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted)
+	require.ErrorIs(t, err, credentials.ErrSubscriptionPoolExhausted)
 	require.True(t, managed)
 	require.Empty(t, lease.AccountID)
 	require.Len(t, leaser.owners, 2)

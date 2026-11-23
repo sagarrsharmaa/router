@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
@@ -43,8 +44,8 @@ func TestCodexRoutesAgentRepliesWithoutChangingProviderInput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			selected := &fakeRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: catalog.ModelGPT6Luna, Reason: "scored"}}
 			upstream := &fakeProvider{proxyResponse: responsesTextUpstream}
-			svc := proxy.WithStrategyPorts(proxy.NewService(selected, map[string]providers.Client{providers.ProviderOpenAI: upstream}, nil, nil, false, providers.ProviderOpenAI, catalog.ModelGPT6Luna, nil), hmm.ServingPorts()).
-				WithOpenAIResponsesBroad(true).
+			svc := proxy.WithStrategyPorts(proxy.NewService(selected, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: upstream}), nil, nil, false, providers.ProviderOpenAI, catalog.ModelGPT6Luna, nil), hmm.ServingPorts()).
+				WithIngress(responsesBroadFormats(true)).
 				WithPolicyStrategy(policy.StrategySpec{Strategy: router.StrategyHMM, Router: selected, Capabilities: policy.Capabilities{AuthoritativePerTurnSelection: true}})
 			body := []byte(`{"model":"weave-auto","stream":true,"tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}],"input":[
 				{"type":"message","role":"user","content":"Repair the parser and verify edge cases"},` + test.delivery + `]}`)
@@ -84,8 +85,8 @@ func TestCodexRoutingHistoryStripsConsumedToolCommands(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			selected := &fakeRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: catalog.ModelGPT6Luna, Reason: "scored"}}
 			upstream := &fakeProvider{proxyResponse: responsesTextUpstream}
-			svc := proxy.WithStrategyPorts(proxy.NewService(selected, map[string]providers.Client{providers.ProviderOpenAI: upstream}, nil, newFakePinStore(), false, providers.ProviderOpenAI, catalog.ModelGPT6Luna, nil), hmm.ServingPorts()).
-				WithOpenAIResponsesBroad(true).
+			svc := proxy.WithStrategyPorts(proxy.NewService(selected, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: upstream}), nil, newFakePinStore(), false, providers.ProviderOpenAI, catalog.ModelGPT6Luna, nil), hmm.ServingPorts()).
+				WithIngress(responsesBroadFormats(true)).
 				WithPolicyStrategy(policy.StrategySpec{Strategy: router.StrategyHMM, Router: selected, Capabilities: policy.Capabilities{AuthoritativePerTurnSelection: true}})
 			body := []byte(`{"model":"weave-auto","stream":true,"tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}],"input":[
 				{"type":"message","role":"user","content":"Repair the parser"},

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"time"
+	"weave-os/router/internal/routingpolicy"
 
 	"weave-os/router/internal/flags"
 	"weave-os/router/internal/observability"
@@ -19,7 +20,6 @@ import (
 	"weave-os/router/internal/router/armid"
 	"weave-os/router/internal/router/continuity"
 	"weave-os/router/internal/router/escalation"
-	"weave-os/router/internal/router/escalation/floor"
 	"weave-os/router/internal/router/sessionpin"
 	"weave-os/router/internal/router/switchpolicy"
 	"weave-os/router/internal/router/turntype"
@@ -33,7 +33,7 @@ func agreementShadowEnabled(ctx context.Context) bool {
 	return managed && policyregistry.ServingTarget(identity.Target) == policyregistry.TargetInternal && identity.StateNamespace != "" && identity.ReleaseID != "" && identity.BindingID != "" && flags.IntOr(ctx, flags.KeyAgreementShadowEpoch, 0) > 0
 }
 
-func applyAgreementShadowTelemetry(ports continuity.StrategyPorts, ctx context.Context, p *turnrecord.InsertTelemetryParams, res turnLoopResult) {
+func applyAgreementShadowTelemetry(ports continuity.StrategyPorts, ctx context.Context, p *turnrecord.InsertTelemetryParams, res routingpolicy.TurnRoute) {
 	if !agreementShadowEnabled(ctx) {
 		return
 	}
@@ -53,7 +53,7 @@ func applyAgreementShadowTelemetry(ports continuity.StrategyPorts, ctx context.C
 		Observation: switchpolicy.ShadowObservation{RequestID: p.RequestID, StartedAt: p.Timestamp, Gap: switchpolicy.ShadowGapUnsupported},
 	}
 	p.AgreementShadow = shadow
-	if !res.AuthoritativePerTurn || !isHMMDecision(ports, res.Fresh) || res.HardPinned || res.ForcedPinDropped || res.PolicyFallback || res.CallerModelPassthrough || res.UsageBypass || floor.RoutingApplied(res.Fresh) {
+	if !res.IsAuthoritativeHMMDecision(ports) {
 		return
 	}
 	md, classifier := res.Fresh.Metadata, ports.Facts.ClassifierTelemetryOf(res.Fresh.Metadata)
@@ -176,7 +176,7 @@ func (s *Service) recordAgreementShadowCommandBoundary(ctx context.Context, inst
 	for _, role := range forceModelClearRoles() {
 		p := turnrecord.InsertTelemetryParams{InstallationID: installationID.String(), RequestID: commandID, Timestamp: startedAt,
 			SessionKey: threadKey[:], Role: role, TurnType: string(turntype.MainLoop), UpstreamStatusCode: http.StatusOK}
-		applyAgreementShadowTelemetry(s.strategyPorts, ctx, &p, turnLoopResult{})
+		applyAgreementShadowTelemetry(s.strategyPorts, ctx, &p, routingpolicy.TurnRoute{})
 		s.recordAgreementShadow(boundaryCtx, log, p)
 	}
 }

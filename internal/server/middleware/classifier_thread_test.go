@@ -46,15 +46,16 @@ func TestClassifierThreadHTTPContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	installation := uuid.New()
 	store := &threadEndpointStore{}
-	svc := &proxy.Service{}
-	require.NoError(t, svc.WithClassifierSessions(proxy.ClassifierSessionConfig{Release: "llm-classifier-v1.0.0", ReleaseSHA256: strings.Repeat("a", 64), SelectionPolicySHA256: strings.Repeat("b", 64), SigningKey: []byte(strings.Repeat("k", 32)), InstallationIDs: []uuid.UUID{installation}}, store, unusedThreadClassifier{}))
+	sessions, err := proxy.NewClassifierSessions(proxy.ClassifierSessionConfig{Release: "llm-classifier-v1.0.0", ReleaseSHA256: strings.Repeat("a", 64), SelectionPolicySHA256: strings.Repeat("b", 64), SigningKey: []byte(strings.Repeat("k", 32)), InstallationIDs: []uuid.UUID{installation}}, store, unusedThreadClassifier{})
+	require.NoError(t, err)
+	svc := proxy.WithDeps(&proxy.Service{}, proxy.Deps{Routing: &proxy.RoutingDeps{ClassifierSessions: sessions}})
 	ctx := context.WithValue(context.Background(), requestcontext.InstallationIDContextKey{}, installation.String())
 	ctx = context.WithValue(ctx, requestcontext.APIKeyIDContextKey{}, "test-credential")
 	ctx = router.WithStrategy(ctx, router.StrategyHMMEmbedding)
 	engine := gin.New()
 	engine.POST("/v1/router/threads", classifier.StartThreadHandler(svc))
 	for _, path := range []string{"/v1/messages", "/v1/chat/completions", "/v1/responses", "/v1beta/models/:modelAction", "/v1/route/handoff", "/v1/route", "/v1/route/preview"} {
-		engine.POST(path, middleware.WithClassifierThread(svc, svc.PolicyStrategyAvailable), func(c *gin.Context) {
+		engine.POST(path, middleware.WithClassifierThread(svc, proxy.NewRoutingCatalog(svc).PolicyStrategyAvailable), func(c *gin.Context) {
 			body, err := io.ReadAll(c.Request.Body)
 			require.NoError(t, err)
 			require.Empty(t, c.GetHeader(requestcontext.ClassifierThreadHeader))

@@ -13,9 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
+	"weave-os/router/internal/router/hmm"
 	"weave-os/router/internal/router/sessionpin"
 	"weave-os/router/internal/translate"
 )
@@ -88,10 +90,10 @@ func rescuableDecision(reason string, withSibling bool) router.Decision {
 func newRescuedFailureTurnService(store sessionpin.Store, decision router.Decision, primary, sibling providers.Client, flagOn bool) *Service {
 	return withHMMPorts(NewService(
 		staticRouter{decision: decision},
-		map[string]providers.Client{
+		dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic: primary,
 			providers.ProviderOpenAI:    sibling,
-		},
+		}),
 		nil, store, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithDeploymentKeyedProviders(map[string]struct{}{
 			providers.ProviderAnthropic: {},
@@ -113,7 +115,7 @@ func assertRescuedFailureStrikes(t *testing.T, demotions []demotionCall, wantDem
 		return
 	}
 	require.Len(t, demotions, 2, "the strike must land on the pin row and its HMM history row")
-	assert.Equal(t, hmmHistoryRole(demotions[0].role), demotions[1].role)
+	assert.Equal(t, hmm.HistoryRole(demotions[0].role), demotions[1].role)
 	if wantDemotionReason == "" {
 		wantDemotionReason = sessionpin.DemotionReasonRescuedFailure
 	}
@@ -225,10 +227,10 @@ func TestProxyMessages_BaselineRetryKeepsStallDemotionOnPrimary(t *testing.T) {
 	baseline := &failingClient{err: providers.ErrUpstreamIdleTimeout}
 	svc := withHMMPorts(NewService(
 		staticRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: primaryModel, Reason: "test"}},
-		map[string]providers.Client{
+		dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic: baseline,
 			providers.ProviderOpenAI:    primary,
-		},
+		}),
 		nil, store, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithDeploymentKeyedProviders(map[string]struct{}{
 			providers.ProviderAnthropic: {},

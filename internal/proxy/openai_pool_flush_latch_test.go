@@ -12,6 +12,8 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/billing"
+	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
@@ -42,10 +44,10 @@ func TestProxyOpenAIChatCompletion_ManagedPoolFailureIsRenderedOnce(t *testing.T
 			Model:    "gpt-5.6-sol",
 			Metadata: &router.RoutingMetadata{CandidateModels: []string{"gpt-5.6-sol"}},
 		}},
-		map[string]providers.Client{
+		dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderOpenAI:    openAI,
 			providers.ProviderAnthropic: &fakeClient{name: providers.ProviderAnthropic},
-		},
+		}),
 		nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithManagedSubscriptions(leaser).
 		WithDeploymentKeyedProviders(map[string]struct{}{
@@ -62,7 +64,7 @@ func TestProxyOpenAIChatCompletion_ManagedPoolFailureIsRenderedOnce(t *testing.T
 
 	err := svc.ProxyOpenAIChatCompletion(ctx, body, rec, req)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolExhausted,
+	require.ErrorIs(t, err, credentials.ErrSubscriptionPoolExhausted,
 		"the pool sentinel must survive for the handler to classify")
 	assert.Equal(t, 1, strings.Count(rec.Body.String(), "rate_limit_error"),
 		"the client sees the pool failure exactly once")

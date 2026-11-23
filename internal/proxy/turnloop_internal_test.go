@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
@@ -121,7 +122,7 @@ func TestConsumePostCommandContinuation_RequiresEffectiveStrategy(t *testing.T) 
 	store := newStubPinStore()
 	store.consumeHit = true
 	store.consumePin = sessionpin.Pin{Strategy: router.StrategyHMMEmbedding}
-	svc := withHMMPorts(NewService(nil, nil, nil, store, false,
+	svc := withHMMPorts(NewService(nil, dispatch.NewClients(nil), nil, store, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 	ctx := router.WithStrategy(context.Background(), router.StrategyHMMBeta)
@@ -138,8 +139,8 @@ func TestConsumePostCommandContinuation_RequiresEffectiveStrategy(t *testing.T) 
 func TestApplyPinEvidence_UsesAvailablePriorTurnData(t *testing.T) {
 	t.Parallel()
 
-	zeroTimestamp := turnLoopResult{}
-	applyPinEvidence(hmm.ServingPorts(), &zeroTimestamp, sessionpin.Pin{
+	zeroTimestamp := routingpolicy.TurnRoute{}
+	routingpolicy.ApplyPinEvidence(hmm.ServingPorts(), &zeroTimestamp, sessionpin.Pin{
 		Provider: providers.ProviderAnthropic,
 		Model:    "claude-haiku-4-5",
 	}, time.Now())
@@ -147,8 +148,8 @@ func TestApplyPinEvidence_UsesAvailablePriorTurnData(t *testing.T) {
 	assert.Equal(t, providers.ProviderAnthropic, zeroTimestamp.PinProvider)
 	assert.Nil(t, zeroTimestamp.PriorTurnGapMS)
 
-	withHistory := turnLoopResult{}
-	applyPinEvidence(hmm.ServingPorts(), &withHistory, sessionpin.Pin{
+	withHistory := routingpolicy.TurnRoute{}
+	routingpolicy.ApplyPinEvidence(hmm.ServingPorts(), &withHistory, sessionpin.Pin{
 		Provider:        providers.ProviderFireworks,
 		Model:           "accounts/fireworks/models/qwen3-235b-a22b",
 		PolicyGroup:     "high",
@@ -200,7 +201,7 @@ func TestRecordTurnUsage_WritesToStore(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -212,7 +213,7 @@ func TestRecordTurnUsage_WritesToStore(t *testing.T) {
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		Decision:   router.Decision{Provider: "anthropic", Model: "claude-opus-4-7"},
 		SessionKey: sessionKey,
 		PinRole:    sessionpin.DefaultRole,
@@ -235,7 +236,7 @@ func TestRecordTurnUsage_PassthroughDoesNotReadOrWritePins(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -244,7 +245,7 @@ func TestRecordTurnUsage_PassthroughDoesNotReadOrWritePins(t *testing.T) {
 
 	var sessionKey [sessionpin.SessionKeyLen]byte
 	sessionKey[0] = 1
-	svc.recordTurnUsage(context.Background(), turnLoopResult{
+	svc.recordTurnUsage(context.Background(), routingpolicy.TurnRoute{
 		Decision:               router.Decision{Provider: providers.ProviderAnthropic, Model: "claude-sonnet-4-6"},
 		SessionKey:             sessionKey,
 		PinRole:                sessionpin.DefaultRole,
@@ -262,7 +263,7 @@ func TestRecordTurnUsage_ForwardsSwitchHistory(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -274,7 +275,7 @@ func TestRecordTurnUsage_ForwardsSwitchHistory(t *testing.T) {
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		Decision:            router.Decision{Provider: "anthropic", Model: "claude-opus-4-7"},
 		SessionKey:          sessionKey,
 		PinRole:             sessionpin.DefaultRole,
@@ -294,7 +295,7 @@ func TestRecordTurnUsage_HMMDecisionWritesHistoryOnly(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -306,7 +307,7 @@ func TestRecordTurnUsage_HMMDecisionWritesHistoryOnly(t *testing.T) {
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		InstallationID: uuid.New(),
 		Strategy:       router.StrategyHMMBeta,
 		Decision: router.Decision{
@@ -330,12 +331,12 @@ func TestRecordTurnUsage_HMMDecisionWritesHistoryOnly(t *testing.T) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	require.Len(t, store.upserts, 1)
-	assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), store.upserts[0].Role)
+	assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), store.upserts[0].Role)
 	assert.Equal(t, "hmm_policy(label=high)", store.upserts[0].Reason)
 	assert.Equal(t, providers.ProviderAnthropic, store.upserts[0].Provider)
 	assert.Empty(t, store.upserts[0].Model, "HMM history rows must not be routable pins")
 	assert.Equal(t, router.StrategyHMMBeta, store.upserts[0].Strategy)
-	assert.Equal(t, []string{hmmHistoryRole(sessionpin.DefaultRole)}, store.usageRoles)
+	assert.Equal(t, []string{hmm.HistoryRole(sessionpin.DefaultRole)}, store.usageRoles)
 	assert.NotContains(t, store.usageRoles, sessionpin.DefaultRole, "HMM turns must not mutate the active routing pin role")
 	assert.Equal(t, 1200, store.lastUsage.InputTokens)
 	assert.Equal(t, 900, store.lastUsage.CachedReadTokens)
@@ -350,7 +351,7 @@ func TestRecordTurnUsage_HMMModelChangeWritesCurrentUsageOnly(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -362,7 +363,7 @@ func TestRecordTurnUsage_HMMModelChangeWritesCurrentUsageOnly(t *testing.T) {
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		InstallationID: uuid.New(),
 		Decision: router.Decision{
 			Provider: providers.ProviderAnthropic,
@@ -383,18 +384,18 @@ func TestRecordTurnUsage_HMMModelChangeWritesCurrentUsageOnly(t *testing.T) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	assert.Equal(t, 1, store.usageHits)
-	assert.Equal(t, []string{hmmHistoryRole(sessionpin.DefaultRole)}, store.usageRoles)
+	assert.Equal(t, []string{hmm.HistoryRole(sessionpin.DefaultRole)}, store.usageRoles)
 	assert.Equal(t, 1200, store.lastUsage.InputTokens)
 	assert.Equal(t, 80, store.lastUsage.OutputTokens)
 	assert.Equal(t, "claude-sonnet-5", store.lastUsage.ServedModel)
 	assert.Equal(t, "claude-haiku-4-5", store.lastUsage.PriorServedModel)
 }
 
-func TestRecordHMMTurnHistory_ZeroUsageRefreshesTTLButSkipsUsageWriteback(t *testing.T) {
+func TestRecordSwitchHistory_ZeroUsageRefreshesTTLButSkipsUsageWriteback(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -406,7 +407,7 @@ func TestRecordHMMTurnHistory_ZeroUsageRefreshesTTLButSkipsUsageWriteback(t *tes
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		InstallationID: uuid.New(),
 		Decision: router.Decision{
 			Provider: providers.ProviderAnthropic,
@@ -426,18 +427,18 @@ func TestRecordHMMTurnHistory_ZeroUsageRefreshesTTLButSkipsUsageWriteback(t *tes
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	require.Len(t, store.upserts, 1, "TTL-refreshing upsert must still run on a zero-usage turn")
-	assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), store.upserts[0].Role)
+	assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), store.upserts[0].Role)
 	assert.Empty(t, store.usageRoles, "zero-usage turn must not clobber the history row's usage columns")
 	assert.Equal(t, 0, store.usageHits)
 }
 
-func TestRecordHMMTurnHistory_ZeroUsagePreservesPriorProvider(t *testing.T) {
+func TestRecordSwitchHistory_ZeroUsagePreservesPriorProvider(t *testing.T) {
 	store := newStubPinStore()
 	store.getFound = true
 	store.getPin = sessionpin.Pin{Provider: providers.ProviderMakora}
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderMakora: nil, providers.ProviderOpenAI: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderMakora: nil, providers.ProviderOpenAI: nil}),
 		nil,
 		store,
 		false,
@@ -449,7 +450,7 @@ func TestRecordHMMTurnHistory_ZeroUsagePreservesPriorProvider(t *testing.T) {
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		InstallationID: uuid.New(),
 		Decision: router.Decision{
 			Provider: providers.ProviderOpenAI,
@@ -473,7 +474,7 @@ func TestRecordHMMTurnHistory_ZeroUsagePreservesPriorProvider(t *testing.T) {
 func TestNormalizeHMMStayPin_RepairsMismatchedProvider(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderMakora: nil, providers.ProviderOpenAI: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderMakora: nil, providers.ProviderOpenAI: nil}),
 		nil,
 		nil,
 		false,
@@ -497,7 +498,7 @@ func TestNormalizeHMMStayPin_RepairsMismatchedProvider(t *testing.T) {
 func TestNormalizeHMMStayPin_ReResolvesDisabledProvider(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderMakora: nil, providers.ProviderOpenAI: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderMakora: nil, providers.ProviderOpenAI: nil}),
 		nil,
 		nil,
 		false,
@@ -523,7 +524,7 @@ func TestNormalizeHMMStayPin_PreservesCatalogRoutableTerra(t *testing.T) {
 	availableProviders := map[string]struct{}{providers.ProviderOpenAI: {}}
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderOpenAI: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: nil}),
 		nil,
 		nil,
 		false,
@@ -549,7 +550,7 @@ func TestRecordTurnUsage_HMMEVStayWritesHistoryOnly(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -561,7 +562,7 @@ func TestRecordTurnUsage_HMMEVStayWritesHistoryOnly(t *testing.T) {
 		sessionKey[i] = byte(i + 1)
 	}
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		InstallationID: uuid.New(),
 		Decision: router.Decision{
 			Provider: providers.ProviderAnthropic,
@@ -586,24 +587,24 @@ func TestRecordTurnUsage_HMMEVStayWritesHistoryOnly(t *testing.T) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	require.Len(t, store.upserts, 1)
-	assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), store.upserts[0].Role)
+	assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), store.upserts[0].Role)
 	assert.Empty(t, store.upserts[0].Model, "HMM history rows must not be routable pins")
-	assert.Equal(t, []string{hmmHistoryRole(sessionpin.DefaultRole)}, store.usageRoles)
+	assert.Equal(t, []string{hmm.HistoryRole(sessionpin.DefaultRole)}, store.usageRoles)
 	assert.Equal(t, 80, store.lastUsage.OutputTokens)
 	assert.Equal(t, "claude-sonnet-5", store.lastUsage.ServedModel)
 }
 
 func TestStickyStateRole_HMMEVStayTargetsHistory(t *testing.T) {
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		StickyHit:  true,
 		PinRole:    sessionpin.DefaultRole,
-		StickyRole: hmmHistoryRole(sessionpin.DefaultRole),
+		StickyRole: hmm.HistoryRole(sessionpin.DefaultRole),
 	}
-	assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), stickyStateRole(res))
+	assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), stickyStateRole(res))
 }
 
 func TestStickyStateRole_DefaultsToActivePinRole(t *testing.T) {
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		StickyHit: true,
 		PinRole:   sessionpin.DefaultRole,
 	}
@@ -613,7 +614,7 @@ func TestStickyStateRole_DefaultsToActivePinRole(t *testing.T) {
 func TestHMMCostGate_StaysOnWarmCacheWhenCheaperFreshDoesNotClearEV(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -652,7 +653,7 @@ func TestHMMCostGate_StaysOnWarmCacheWhenCheaperFreshDoesNotClearEV(t *testing.T
 func TestHMMCostGate_SwitchesCheaperFreshWhenEVPositive(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -690,7 +691,7 @@ func TestHMMCostGate_SwitchesCheaperFreshWhenEVPositive(t *testing.T) {
 func TestHMMCostGate_PhaseChangeFollowsFreshDecisionWhenEVPositive(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -731,7 +732,7 @@ func TestHMMCostGate_PhaseChangeFollowsFreshDecisionWhenEVPositive(t *testing.T)
 func TestHMMCostGate_HistoryPhaseChangeFollowsFreshDecisionWhenEVPositive(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -771,7 +772,7 @@ func TestHMMCostGate_HistoryPhaseChangeFollowsFreshDecisionWhenEVPositive(t *tes
 func TestHMMCostGate_ExpensiveUpgradeRequiresHighConfidence(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderFireworks: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderFireworks: nil}),
 		nil,
 		nil,
 		false,
@@ -821,7 +822,7 @@ func TestHMMCostGate_ExpensiveUpgradeRequiresHighConfidence(t *testing.T) {
 func TestHMMCostGate_IgnoresExpiredActivePin(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -861,7 +862,7 @@ func TestHMMCostGate_IgnoresExpiredActivePin(t *testing.T) {
 func TestHMMCostGate_IgnoresNonHMMActivePin(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -904,7 +905,7 @@ func TestHMMCostGate_IgnoresNonHMMActivePin(t *testing.T) {
 func TestHMMCostGate_HonorsHMMReasonedActivePin(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -948,7 +949,7 @@ func TestHMMCostGate_IgnoresMaxedHistory(t *testing.T) {
 	endedAt := time.Now().Add(-30 * time.Second)
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderMakora: nil}),
 		nil,
 		nil,
 		false,
@@ -993,7 +994,7 @@ func TestLoadPin_DoesNotServeExpiredPostgresPinButKeepsEmitHistory(t *testing.T)
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -1025,12 +1026,12 @@ func TestLoadPin_DoesNotServeExpiredPostgresPinButKeepsEmitHistory(t *testing.T)
 	assert.Equal(t, "claude-opus-4-7", pin.LastServedModel, "expired row history must be available for emit")
 	assert.True(t, pin.HasEverSwitched, "expired row latch must be available for emit")
 
-	res := turnLoopResult{
+	res := routingpolicy.TurnRoute{
 		Decision:            router.Decision{Model: "claude-opus-4-7"},
 		PriorServedModel:    pin.LastServedModel,
 		SessionEverSwitched: pin.HasEverSwitched,
 	}
-	assert.True(t, res.modelSwitched(), "expired switched-session history must still strip thinking blocks")
+	assert.True(t, res.ModelSwitched(), "expired switched-session history must still strip thinking blocks")
 }
 
 // TestLoadPin_ServesFreshPostgresPin is the companion: a non-expired Postgres
@@ -1039,7 +1040,7 @@ func TestLoadPin_ServesFreshPostgresPin(t *testing.T) {
 	store := newStubPinStore()
 	svc := withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -1093,7 +1094,7 @@ func TestLoadPin_RequiresBetaStrategyMatch(t *testing.T) {
 				Strategy:    tt.stored,
 				PinnedUntil: time.Now().Add(time.Hour),
 			}
-			svc := withHMMPorts(NewService(nil, nil, nil, store, false,
+			svc := withHMMPorts(NewService(nil, dispatch.NewClients(nil), nil, store, false,
 				providers.ProviderAnthropic, "claude-haiku-4-5", nil))
 
 			ctx := router.WithStrategy(context.Background(), tt.request)
@@ -1113,12 +1114,12 @@ func TestSwitchHistoryFromPins_UsesHMMHistory(t *testing.T) {
 		LastServedModel: "claude-haiku-4-5",
 		LastTurnEndedAt: now.Add(-time.Minute),
 	}
-	hmmHistory := sessionpin.Pin{
+	switchHistory := sessionpin.Pin{
 		LastServedModel: "claude-sonnet-5",
 		LastTurnEndedAt: now,
 	}
 
-	prior, everSwitched := switchHistoryFromPins(active, hmmHistory)
+	prior, everSwitched := switchHistoryFromPins(active, switchHistory)
 
 	assert.Equal(t, "claude-sonnet-5", prior)
 	assert.True(t, everSwitched, "different active/history models must preserve thinking-block stripping")
@@ -1169,12 +1170,12 @@ func TestModelSwitched(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			res := turnLoopResult{
+			res := routingpolicy.TurnRoute{
 				Decision:            router.Decision{Model: tc.decisionModel},
 				PriorServedModel:    tc.priorServedModel,
 				SessionEverSwitched: tc.everSwitched,
 			}
-			assert.Equal(t, tc.want, res.modelSwitched())
+			assert.Equal(t, tc.want, res.ModelSwitched())
 		})
 	}
 }
@@ -1182,7 +1183,7 @@ func TestModelSwitched(t *testing.T) {
 func TestService_NewService_HMMUpgradeConfidenceDefaults(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil}),
 		nil,
 		nil,
 		false,
@@ -1195,7 +1196,7 @@ func TestService_NewService_HMMUpgradeConfidenceDefaults(t *testing.T) {
 func TestHMMCostGate_UpgradeThresholdConfigurable(t *testing.T) {
 	svc := withHMMPorts(NewService(
 		nil,
-		map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderFireworks: nil},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: nil, providers.ProviderFireworks: nil}),
 		nil,
 		nil,
 		false,

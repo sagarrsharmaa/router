@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
@@ -34,12 +35,12 @@ type fakeSummarizer struct {
 	summary   string
 	errOnCall error
 	calls     atomic.Int32
-	creds     atomic.Pointer[proxy.Credentials]
+	creds     atomic.Pointer[requestcontext.Credentials]
 }
 
 func (f *fakeSummarizer) Summarize(ctx context.Context, env *translate.RequestEnvelope, _ router.Request) (string, handover.Usage, error) {
 	f.calls.Add(1)
-	if creds, ok := ctx.Value(proxy.CredentialsContextKey{}).(*proxy.Credentials); ok {
+	if creds, ok := ctx.Value(requestcontext.CredentialsContextKey{}).(*requestcontext.Credentials); ok {
 		f.creds.Store(creds)
 	}
 	if f.errOnCall != nil {
@@ -141,7 +142,7 @@ func newPinSvcCapturing(fr *fakeRouter, store *fakePinStore) (*proxy.Service, *f
 	p := &fakeProvider{}
 	svc := proxy.WithStrategyPorts(proxy.NewService(
 		fr,
-		map[string]providers.Client{providers.ProviderAnthropic: p},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: p}),
 		nil,
 		store,
 		false,
@@ -361,7 +362,7 @@ func TestTurnLoop_HMMHistoryMaxedOutExcludesServedModelBeforeRouting(t *testing.
 	endedAt := time.Now().Add(-30 * time.Second)
 	store := newFakePinStore()
 	store.hasHMMHistory = true
-	store.hmmHistory = sessionpin.Pin{
+	store.switchHistory = sessionpin.Pin{
 		Provider:          providers.ProviderAnthropic,
 		LastServedModel:   "claude-sonnet-5",
 		LastOutputTokens:  8192,
@@ -400,7 +401,7 @@ func TestTurnLoop_HMMExpiredHistoryMaxedOutStillExcludesServedModel(t *testing.T
 	store.hasHMMHistory = true
 	// Expired history row (PinnedUntil in the past) that maxed out its output
 	// cap: the maxed model must still be excluded, matching the active-pin path.
-	store.hmmHistory = sessionpin.Pin{
+	store.switchHistory = sessionpin.Pin{
 		Provider:          providers.ProviderAnthropic,
 		LastServedModel:   "claude-sonnet-5",
 		LastOutputTokens:  8192,
@@ -566,10 +567,10 @@ func TestTurnLoop_ToolResultPinOnExcludedProviderFallsThroughToScorer(t *testing
 	}}
 	svc := proxy.WithStrategyPorts(proxy.NewService(
 		fr,
-		map[string]providers.Client{
+		dispatch.NewClients(map[string]providers.Client{
 			providers.ProviderAnthropic: &fakeProvider{},
 			providers.ProviderOpenAI:    &fakeProvider{},
-		},
+		}),
 		nil,
 		store,
 		false,
@@ -688,7 +689,7 @@ func TestTurnLoop_HandoverPreservesFullHistoryWhenSummarizerNotWired(t *testing.
 		LastTurnEndedAt: time.Now().Add(-30 * time.Second),
 	}
 	fr := &fakeRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: "claude-haiku-4-5", Reason: "cluster:v0.2"}}
-	// No WithSummarizer call — Service.summarizer stays nil.
+	// No WithSummarizer call — the lifecycle summarizer stays nil.
 	svc, provider := newPinSvcCapturing(fr, store)
 
 	ctx := authedCtx(uuid.New().String())
@@ -837,7 +838,7 @@ func TestTurnLoop_UsageWritebackPersistsCacheStats(t *testing.T) {
 	// Pin storage and telemetry both require upstream usage capture.
 	svc := proxy.WithStrategyPorts(proxy.NewService(
 		fr,
-		map[string]providers.Client{providers.ProviderAnthropic: provider},
+		dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: provider}),
 		nil,
 		store,
 		false,
@@ -933,7 +934,7 @@ func TestTurnLoop_PrefixTrimKillSwitchPreservesWarmStay(t *testing.T) {
 	store.pin = warmOpusPin()
 	fr := &fakeRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: "claude-haiku-4-5", Reason: "cluster:v0.2"}}
 	sz := &fakeSummarizer{summary: "Prior conversation summary."}
-	svc := newPinSvc(fr, store).WithSummarizer(sz).WithPrefixTrimFreeSwitch(false).EditContinuityConfig(func(c *continuity.Config) {
+	svc := proxy.WithPrefixTrimFreeSwitch(newPinSvc(fr, store).WithSummarizer(sz), false).EditContinuityConfig(func(c *continuity.Config) {
 		c.Planner = planner.EVConfig{ThresholdUSD: 0.001, ExpectedRemainingTurns: 3}
 	})
 	ctx := authedCtx(uuid.New().String())

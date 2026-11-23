@@ -14,7 +14,7 @@ import (
 const subscriptionSessionHold = 5 * time.Minute
 
 func sessionHoldOwner(ctx context.Context) string {
-	session := ClientIdentityFrom(ctx).SessionID
+	session := requestcontext.ClientIdentityFrom(ctx).SessionID
 	if session == "" {
 		return ""
 	}
@@ -24,8 +24,8 @@ func sessionHoldOwner(ctx context.Context) string {
 
 func (s *Service) holdSessionOffSubscriptionPool(ctx context.Context, provider, model string) {
 	owner := sessionHoldOwner(ctx)
-	pool, compatible := managedSubscriptionProviderFromUpstream(provider, model)
-	if owner == "" || !compatible || !s.subscriptionPoolUnavailable(ctx, provider, model) {
+	pool, compatible := credentials.ManagedSubscriptionProviderFromUpstream(provider, model)
+	if owner == "" || !compatible || !s.credentials.SubscriptionPoolUnavailable(ctx, provider, model) {
 		return
 	}
 	s.credentials.SessionHolds.Hold(owner, pool, s.clock.Now().Add(subscriptionSessionHold))
@@ -34,7 +34,7 @@ func (s *Service) holdSessionOffSubscriptionPool(ctx context.Context, provider, 
 
 func withUnservedHoldsReleased(ctx context.Context, holds *credentials.SubscriptionSessionHolds, enabledProviders map[string]struct{}) context.Context {
 	owner := sessionHoldOwner(ctx)
-	state, _ := ctx.Value(credentials.ManagedSubscriptionUsageContextKey{}).(*ManagedSubscriptionUsage)
+	state, _ := ctx.Value(credentials.ManagedSubscriptionUsageContextKey{}).(*credentials.ManagedSubscriptionUsage)
 	if owner == "" || state == nil {
 		return ctx
 	}
@@ -74,7 +74,7 @@ func modelOnHeldPool(model string, held func(subscriptions.Provider) bool) bool 
 		return false
 	}
 	for _, binding := range entry.Providers {
-		if pool, compatible := managedSubscriptionProviderFromUpstream(binding.Provider, model); compatible && held(pool) {
+		if pool, compatible := credentials.ManagedSubscriptionProviderFromUpstream(binding.Provider, model); compatible && held(pool) {
 			return true
 		}
 	}

@@ -17,11 +17,11 @@ import (
 	"weave-os/router/internal/telemetry/turnrecord"
 
 	"weave-os/router/internal/auth"
+	"weave-os/router/internal/credentials/usage"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/observability/otel"
 	"weave-os/router/internal/policyregistry"
 	"weave-os/router/internal/providers"
-	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
@@ -80,8 +80,8 @@ func (f *bypassFakeProvider) Passthrough(context.Context, providers.PreparedRequ
 // provider for direct bypassToAnthropic tests. The full ProxyMessages path is
 // not exercised here; only bypassToAnthropic is.
 func newBypassService(p providers.Client) *Service {
-	return &Service{hmmServing: hmmPorts(),
-		clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: p}),
+	return &Service{strategyServing: hmmPorts(),
+		engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: p})),
 	}
 }
 
@@ -99,10 +99,10 @@ func TestUsageBypassDecision_CodexSubscriptionPreservesRequestedModel(t *testing
 	obs.Record(obs.Key([]byte(codexToken)), usage.Snapshot{
 		Primary: usage.Window{UsedPercent: 0.20, WindowMinutes: 300},
 	})
-	svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}}), usageObserver: obs}
+	svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}})), credentials: credentials.Brokerage{UsageObserver: obs}}
 	ctx := context.WithValue(context.Background(), credentials.OpenAISubscriptionContextKey{}, codexToken)
 	ctx = context.WithValue(ctx, credentials.OpenAIAccountIDContextKey{}, "account-1")
-	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, UsageBypassConfig{
+	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{
 		Enabled:   true,
 		Threshold: &threshold,
 	})
@@ -136,9 +136,9 @@ func TestUsageBypassDecision_SessionDemotionBlocks_GlobalAutomaticExclusionDoesN
 	obs.Record(obs.Key([]byte(token)), usage.Snapshot{
 		Primary: usage.Window{UsedPercent: 0.20, WindowMinutes: 300},
 	})
-	svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}}), usageObserver: obs}
+	svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}})), credentials: credentials.Brokerage{UsageObserver: obs}}
 	ctx := context.WithValue(context.Background(), credentials.AnthropicSubscriptionContextKey{}, token)
-	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, UsageBypassConfig{
+	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{
 		Enabled:   true,
 		Threshold: &threshold,
 	})
@@ -191,7 +191,7 @@ func TestUsageBypassEngaged_SafetyExclusionBlocks_PolicyExclusionDoesNot(t *test
 	}
 	baseCtx := func() context.Context {
 		ctx := context.WithValue(context.Background(), credentials.AnthropicSubscriptionContextKey{}, token)
-		return context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, UsageBypassConfig{
+		return context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{
 			Enabled:   true,
 			Threshold: &threshold,
 		})
@@ -199,7 +199,7 @@ func TestUsageBypassEngaged_SafetyExclusionBlocks_PolicyExclusionDoesNot(t *test
 	enabled := map[string]struct{}{providers.ProviderAnthropic: {}}
 
 	t.Run("installation excluded_models does not block bypass", func(t *testing.T) {
-		svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}}), usageObserver: newObs()}
+		svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}})), credentials: credentials.Brokerage{UsageObserver: newObs()}}
 		provider, ok := svc.usageBypassEngaged(baseCtx(), http.Header{}, router.Request{
 			RequestedModel:   model,
 			EnabledProviders: enabled,
@@ -212,7 +212,7 @@ func TestUsageBypassEngaged_SafetyExclusionBlocks_PolicyExclusionDoesNot(t *test
 	})
 
 	t.Run("safety exclusion blocks bypass", func(t *testing.T) {
-		svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}}), usageObserver: newObs()}
+		svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}})), credentials: credentials.Brokerage{UsageObserver: newObs()}}
 		_, ok := svc.usageBypassEngaged(baseCtx(), http.Header{}, router.Request{
 			RequestedModel:   model,
 			EnabledProviders: enabled,
@@ -224,7 +224,7 @@ func TestUsageBypassEngaged_SafetyExclusionBlocks_PolicyExclusionDoesNot(t *test
 	})
 
 	t.Run("both excluded: safety exclusion still blocks", func(t *testing.T) {
-		svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}}), usageObserver: newObs()}
+		svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}})), credentials: credentials.Brokerage{UsageObserver: newObs()}}
 		_, ok := svc.usageBypassEngaged(baseCtx(), http.Header{}, router.Request{
 			RequestedModel:   model,
 			EnabledProviders: enabled,
@@ -250,10 +250,10 @@ func TestUsageBypass_PreservesSwitchHistory(t *testing.T) {
 		LastServedModel: "claude-haiku-4-5",
 		HasEverSwitched: true,
 	}
-	svc := withHMMPorts(NewService(nil, map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}}, nil, store, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
+	svc := withHMMPorts(NewService(nil, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}}), nil, store, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithUsageObserver(obs)
 	ctx := context.WithValue(context.Background(), credentials.AnthropicSubscriptionContextKey{}, token)
-	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, UsageBypassConfig{
+	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{
 		Enabled:   true,
 		Threshold: &threshold,
 	})
@@ -271,7 +271,7 @@ func TestUsageBypass_PreservesSwitchHistory(t *testing.T) {
 	assert.True(t, res.UsageBypass)
 	assert.Equal(t, "claude-haiku-4-5", res.PriorServedModel)
 	assert.True(t, res.SessionEverSwitched)
-	assert.True(t, res.modelSwitched(), "bypass must retain switch history for Anthropic thinking-block stripping")
+	assert.True(t, res.ModelSwitched(), "bypass must retain switch history for Anthropic thinking-block stripping")
 	assert.True(t, svc.lifecycle.Compaction().Tracks(res.SessionKey, uuid.Nil, res.PinRole), "bypass must retain compaction-trim tracking")
 }
 
@@ -291,7 +291,7 @@ func TestUsageBypass_EngagesUnderAuthoritativePolicy(t *testing.T) {
 		Model:    "gpt-5.6-luna",
 		Reason:   "authoritative-bypass-test_policy",
 	}}
-	svc := withHMMPorts(NewService(nil, map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}}, nil, newStubPinStore(), false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
+	svc := withHMMPorts(NewService(nil, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}}), nil, newStubPinStore(), false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithUsageObserver(obs).
 		WithPolicyStrategy(policy.StrategySpec{
 			Strategy: strategy,
@@ -302,7 +302,7 @@ func TestUsageBypass_EngagesUnderAuthoritativePolicy(t *testing.T) {
 			},
 		})
 	ctx := context.WithValue(context.Background(), credentials.AnthropicSubscriptionContextKey{}, token)
-	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, UsageBypassConfig{
+	ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{
 		Enabled:   true,
 		Threshold: &threshold,
 	})
@@ -453,7 +453,7 @@ func TestBypass_TransportError_ReroutesViaScorer(t *testing.T) {
 func TestBypass_LocalPrepError_PropagatesToClient(t *testing.T) {
 	// Wire a service WITHOUT the Anthropic provider to trigger the
 	// provider-not-configured prep error path.
-	svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{})}
+	svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{}))}
 
 	env := bypassAnthropicEnvelope(t)
 	feats := env.RoutingFeatures()
@@ -482,28 +482,28 @@ func subscriptionCtx() context.Context {
 // subscription flips credential resolution onto the deployment key.
 func TestSubscriptionFailover_EligibilityAndSuppression(t *testing.T) {
 	// A request whose Anthropic credential resolves to the caller's subscription.
-	ctx := resolveAndInjectCredentials(subscriptionCtx(), providers.ProviderAnthropic, "claude-opus-4-8", http.Header{})
-	require.True(t, servedOnSubscription(ctx), "a resolved subscription token must report servedOnSubscription")
+	ctx := credentials.ResolveAndInjectCredentials(subscriptionCtx(), providers.ProviderAnthropic, "claude-opus-4-8", http.Header{})
+	require.True(t, credentials.ServedOnSubscription(ctx), "a resolved subscription token must report servedOnSubscription")
 
 	t.Run("no fallback key: not eligible", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts()} // no deployment Anthropic key, no BYOK
-		assert.False(t, s.anthropicFallbackKeyAvailable(ctx),
+		s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()} // no deployment Anthropic key, no BYOK
+		assert.False(t, s.credentials.AnthropicFallbackKeyAvailable(ctx),
 			"without a Weave/BYOK Anthropic key there is nothing to fail over to")
 	})
 
 	t.Run("deployment Anthropic key present: eligible", func(t *testing.T) {
-		s := &Service{hmmServing: hmmPorts(), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{providers.ProviderAnthropic: {}}}}
-		assert.True(t, s.anthropicFallbackKeyAvailable(ctx),
+		s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), credentials: credentials.Brokerage{KeyedProviders: map[string]struct{}{providers.ProviderAnthropic: {}}}}
+		assert.True(t, s.credentials.AnthropicFallbackKeyAvailable(ctx),
 			"a deployment Anthropic key is a valid failover target for a throttled subscription")
 	})
 
 	t.Run("suppression flips resolution off the subscription", func(t *testing.T) {
-		// After withSuppressedClaudeSubscription, resolution must NOT pick the
+		// After credentials.WithSuppressedClaudeSubscription, resolution must NOT pick the
 		// subscription token — so the retry dispatches on the deployment key and
 		// servedOnSubscription reports false (billed at full cost, not sub rate).
-		suppressed := withSuppressedClaudeSubscription(subscriptionCtx())
-		suppressed = resolveAndInjectCredentials(suppressed, providers.ProviderAnthropic, "claude-opus-4-8", http.Header{})
-		assert.False(t, servedOnSubscription(suppressed),
+		suppressed := credentials.WithSuppressedClaudeSubscription(subscriptionCtx())
+		suppressed = credentials.ResolveAndInjectCredentials(suppressed, providers.ProviderAnthropic, "claude-opus-4-8", http.Header{})
+		assert.False(t, credentials.ServedOnSubscription(suppressed),
 			"a suppressed subscription must not resolve back as the served credential")
 	})
 }
@@ -663,7 +663,6 @@ func TestBypass_EmitsUsageAndCost(t *testing.T) {
 	assert.InDelta(t, wantIn, spanFloat(t, sp, "cost.requested_input_usd"), 1e-9)
 }
 
-// bypassCaptureTelemetry records turnrecord.InsertTelemetryParams rows for assertions.
 // Only InsertRequestTelemetry matters; the read methods satisfy the interface.
 type bypassCaptureTelemetry struct {
 	panicTelemetryRepo // inherit no-op reads
@@ -723,8 +722,8 @@ func TestBypass_PersistsTelemetryRowWithUnifiedHeaders(t *testing.T) {
 	upstreamHeaders := http.Header{}
 	upstreamHeaders.Set("anthropic-ratelimit-unified-status", "allowed")
 	upstreamHeaders.Set("anthropic-ratelimit-unified-overage-status", "rejected")
-	credCtx := context.WithValue(ctx, CredentialsContextKey{}, &Credentials{
-		APIKey: []byte("sk-ant-oat01-live"), Source: credSourceSubscription, OAuth: true,
+	credCtx := context.WithValue(ctx, requestcontext.CredentialsContextKey{}, &requestcontext.Credentials{
+		APIKey: []byte("sk-ant-oat01-live"), Source: requestcontext.SourceSubscription, OAuth: true,
 	})
 	providers.ObserveUpstreamHeaders(credCtx, upstreamHeaders)
 
@@ -751,7 +750,7 @@ func TestBypass_PersistsTelemetryRowWithUnifiedHeaders(t *testing.T) {
 	require.NotNil(t, row.CohortTreatmentApplied)
 	assert.False(t, *row.CohortTreatmentApplied)
 	assert.Equal(t, string(turntype.MainLoop), row.TurnType)
-	routedKey := deriveSessionKeyForRequest(ctx, env, apiKeyIDFromContext(ctx))
+	routedKey := deriveSessionKeyForRequest(ctx, env, requestcontext.APIKeyIDFromContext(ctx))
 	assert.Equal(t, routedKey[:], row.SessionKey, "bypass replies must advance the same session turn clock as routed replies")
 	require.NotNil(t, row.UnifiedLimitHeaders, "captured unified headers must reach the telemetry row")
 	var headers map[string]string

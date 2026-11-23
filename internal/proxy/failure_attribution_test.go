@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/inference"
 	"weave-os/router/internal/ingress"
@@ -28,7 +29,7 @@ func attributionService(t *testing.T, sink *recordingAttemptSink, clients map[st
 	t.Helper()
 	executor, err := dispatch.NewExecutor(dispatch.NewClients(clients), dispatch.WithAttemptSink(sink))
 	require.NoError(t, err)
-	return (&Service{hmmServing: hmmPorts()}).WithInferenceExecutor(executor)
+	return (&Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}).WithInferenceExecutor(executor)
 }
 
 func TestDispatchPlanned_TranslatedRejectionIsRouterOwned(t *testing.T) {
@@ -108,7 +109,7 @@ func TestDispatchPlanned_FailoverRecordsOwnerPerAttemptAndBadgeDetail(t *testing
 	fallback := &fakeClient{name: providers.ProviderOpenRouter, outcomes: []fakeOutcome{{writeBytes: []byte("ok")}}}
 	sink := &recordingAttemptSink{}
 	s := attributionService(t, sink, map[string]providers.Client{providers.ProviderFireworks: primary, providers.ProviderOpenRouter: fallback})
-	s.retrySleep = func(context.Context, time.Duration) error { return nil }
+	s.engine.SetRetrySleep(func(context.Context, time.Duration) error { return nil })
 
 	ctx := withAttemptTrace(context.Background(), []byte(`{"model":"claude","messages":[]}`), http.Header{})
 	rec := httptest.NewRecorder()
@@ -151,7 +152,7 @@ func TestDispatchPlanned_ExhaustionNamesOwnerInTerminalMessage(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := attributionService(t, &recordingAttemptSink{}, map[string]providers.Client{providers.ProviderFireworks: newClient()})
-			s.retrySleep = func(context.Context, time.Duration) error { return nil }
+			s.engine.SetRetrySleep(func(context.Context, time.Duration) error { return nil })
 			ctx := withAttemptTrace(context.Background(), body, tc.header)
 			rec := httptest.NewRecorder()
 			buf := newPreludeBuffer(rec)
@@ -187,13 +188,13 @@ func TestTerminalErrorMessage_RouterAndClientOwners(t *testing.T) {
 }
 
 func TestRouterOwnedFailureWording(t *testing.T) {
-	pool := dispatch.TracedAttempt{Target: inference.Target{Provider: providers.ProviderAnthropic}, Err: ErrSubscriptionPoolExhausted,
+	pool := dispatch.TracedAttempt{Target: inference.Target{Provider: providers.ProviderAnthropic}, Err: credentials.ErrSubscriptionPoolExhausted,
 		Diagnosis: inference.AttemptDiagnosis{ErrorClass: string(turnrecord.TurnErrorOther), FailureOwner: string(turnrecord.FailureOwnerRouter)}}
 	assert.Equal(t, "↳ switched: Anthropic had no subscription capacity (router issue)\n\n", rescueDetailLine(pool))
 	assert.Equal(t, "Router error: Anthropic subscription capacity exhausted.", terminalMessageFor(pool))
 
 	rejected := dispatch.TracedAttempt{Target: inference.Target{Provider: providers.ProviderOpenAI},
-		Err:       errors.Join(ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusUnauthorized}),
+		Err:       errors.Join(credentials.ErrSubscriptionPoolExhausted, &providers.UpstreamErrorResponse{Status: http.StatusUnauthorized}),
 		Diagnosis: inference.AttemptDiagnosis{ErrorClass: string(turnrecord.TurnErrorOther), FailureOwner: string(turnrecord.FailureOwnerRouter)}}
 	assert.Equal(t, "↳ switched: OpenAI rejected the subscription login (router issue)\n\n", rescueDetailLine(rejected))
 

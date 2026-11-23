@@ -10,9 +10,10 @@ import (
 
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/credentials/usage"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
-	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/hmm"
@@ -44,7 +45,7 @@ func classifierPassthroughFixture(t *testing.T, obs *usage.Observer) (*proxy.Ser
 		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"` + classifierRequestedMdl + `","content":[{"type":"text","text":"<severity>0</severity>"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}}
 	store := newFakePinStore()
-	svc := proxy.WithStrategyPorts(proxy.NewService(fr, map[string]providers.Client{providers.ProviderAnthropic: p}, nil, store, false, providers.ProviderAnthropic, classifierRequestedMdl, nil), hmm.ServingPorts())
+	svc := proxy.WithStrategyPorts(proxy.NewService(fr, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: p}), nil, store, false, providers.ProviderAnthropic, classifierRequestedMdl, nil), hmm.ServingPorts())
 	if obs != nil {
 		svc = svc.WithUsageObserver(obs)
 	}
@@ -198,7 +199,7 @@ func TestClassifier_ExhaustedSubscription_NoFallbackRefusesBeforeDispatch(t *tes
 	svc, fr, p, _ := classifierPassthroughFixture(t, exhaustedObserver())
 	rec, req := classifierRequest(t.Context())
 
-	require.ErrorIs(t, svc.ProxyMessages(classifierSubscriptionCtx(), []byte(classifierBody), rec, req), proxy.ErrSubscriptionPoolExhausted)
+	require.ErrorIs(t, svc.ProxyMessages(classifierSubscriptionCtx(), []byte(classifierBody), rec, req), credentials.ErrSubscriptionPoolExhausted)
 	assert.Equal(t, 0, fr.routeCalls)
 	assert.Empty(t, p.proxyCreds, "known spent credential cannot be dispatched")
 }
@@ -210,7 +211,7 @@ func TestClassifier_SubscriptionOnly_Exhausted_Refuses402(t *testing.T) {
 	err := svc.ProxyMessages(billing.WithSubscriptionOnly(classifierSubscriptionCtx(), billing.SubscriptionOnlyCreditsDepleted), []byte(classifierBody), rec, req)
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, proxy.ErrCreditsExhaustedSubscriptionUnavailable)
+	require.ErrorIs(t, err, credentials.ErrCreditsExhaustedSubscriptionUnavailable)
 	assert.Empty(t, p.proxyBodies, "no paid dispatch may occur when the subscription cannot serve the classifier")
 }
 
@@ -253,7 +254,7 @@ func TestClassifier_PassthroughRetryable_FallsBackToRoutedDispatch_NoPin(t *test
 	}}
 	upstream := &swapErrProvider{first: limit, second: nil, inner: inner}
 	store := newFakePinStore()
-	svc := proxy.WithStrategyPorts(proxy.NewService(fr, map[string]providers.Client{providers.ProviderAnthropic: upstream}, nil, store, false, providers.ProviderAnthropic, classifierRequestedMdl, nil), hmm.ServingPorts())
+	svc := proxy.WithStrategyPorts(proxy.NewService(fr, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: upstream}), nil, store, false, providers.ProviderAnthropic, classifierRequestedMdl, nil), hmm.ServingPorts())
 	rec, req := classifierRequest(t.Context())
 
 	require.NoError(t, svc.ProxyMessages(classifierSubscriptionCtx(), []byte(classifierBody), rec, req))

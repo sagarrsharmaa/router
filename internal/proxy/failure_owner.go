@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"weave-os/router/internal/conversation"
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/telemetry/turnrecord"
@@ -36,16 +38,16 @@ func classifyFailureOwner(in failureOwnerInput) turnrecord.FailureOwner {
 	if errors.Is(err, errResponsesPassthroughStuck) {
 		return turnrecord.FailureOwnerRouter
 	}
-	if errors.Is(err, errCallerPlanThrottled) {
+	if errors.Is(err, credentials.ErrCallerPlanThrottled) {
 		return turnrecord.FailureOwnerClient
 	}
 	if cls, ok := ClassifyDispatchError(err); ok && cls.Kind != ingress.DispatchErrorUpstreamStatus {
 		switch {
-		case cls.Kind == ingress.DispatchErrorHandoff && errors.Is(err, ErrHandoffUnavailable):
+		case cls.Kind == ingress.DispatchErrorHandoff && errors.Is(err, conversation.ErrHandoffUnavailable):
 			return turnrecord.FailureOwnerRouter
-		case cls.Kind == ingress.DispatchErrorSubscriptionPoolExhausted && (upstreamStatus(err) == http.StatusTooManyRequests || errors.Is(err, errLinkedSeatsThrottled)):
+		case cls.Kind == ingress.DispatchErrorSubscriptionPoolExhausted && (upstreamStatus(err) == http.StatusTooManyRequests || errors.Is(err, credentials.ErrLinkedSeatsThrottled)):
 			return turnrecord.FailureOwnerProvider
-		case cls.Kind == ingress.DispatchErrorSubscriptionPoolExhausted && errors.Is(err, errLinkedSeatsUnusable):
+		case cls.Kind == ingress.DispatchErrorSubscriptionPoolExhausted && errors.Is(err, credentials.ErrLinkedSeatsUnusable):
 			return turnrecord.FailureOwnerClient
 		}
 		return dispatchErrorKindOwner(cls.Kind)

@@ -10,6 +10,7 @@ import (
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
@@ -28,7 +29,7 @@ func TestProxyMessages_WeaveCreditsDenied(t *testing.T) {
 		wantErr    error
 		wantSource string
 	}{
-		{name: "denied without a customer key refuses before dispatch", denied: true, wantErr: proxy.ErrWeaveCreditsDisabled},
+		{name: "denied without a customer key refuses before dispatch", denied: true, wantErr: credentials.ErrWeaveCreditsDisabled},
 		{name: "denied with the customer's Anthropic key serves on it", denied: true,
 			keys:       []*auth.ExternalAPIKey{{Provider: providers.ProviderAnthropic, Plaintext: []byte("synthetic-byok")}},
 			wantSource: "byok"},
@@ -38,8 +39,8 @@ func TestProxyMessages_WeaveCreditsDenied(t *testing.T) {
 			repo := &capturingBillingRepo{}
 			fr := &fakeRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: "claude-sonnet-4-6"}}
 			p := &fakeProvider{proxyResponse: bypassStreamResponse}
-			svc := proxy.WithStrategyPorts(proxy.NewService(fr, map[string]providers.Client{providers.ProviderAnthropic: p}, nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil), hmm.ServingPorts()).
-				WithBillingService(billing.NewService(repo))
+			svc := proxy.WithDeps(proxy.WithStrategyPorts(proxy.NewService(fr, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: p}), nil, nil, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil), hmm.ServingPorts()),
+				proxy.Deps{Telemetry: proxy.TelemetryDeps{Billing: billing.NewService(repo)}})
 
 			ctx := context.WithValue(context.Background(), requestcontext.ExternalIDContextKey{}, "org-credits")
 			ctx = billing.WithOrganizationPrepaid(ctx)

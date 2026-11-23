@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/routingpolicy"
 
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/ingress"
@@ -33,7 +35,7 @@ type chatAttemptDeps struct {
 	responsesBody        []byte
 	log                  *slog.Logger
 	fastServed           *bool
-	routeRes             *turnLoopResult
+	routeRes             *routingpolicy.TurnRoute
 	makeMarkerSink       func(notice translate.RouterNotice) (http.ResponseWriter, error)
 	cyberRetryArmed      *bool
 	preOutputRescueArmed *bool
@@ -50,10 +52,10 @@ type chatAttemptDeps struct {
 }
 
 func buildChatAttempt(ctx context.Context, deps chatAttemptDeps, target router.Decision, targetOpts translate.EmitOptions, targetMarker string, fundingCtx context.Context) (dispatch.UpstreamAttempt, error) {
-	targetNotice := routerNoticeForDecision(withOwnCodexRejectionNudge(ctx, deps.request.Header, deps.svc.usageObserver), deps.request.Header, target, targetMarker)
+	targetNotice := routerNoticeForDecision(withOwnCodexRejectionNudge(ctx, deps.request.Header, deps.svc.credentials.UsageObserver), deps.request.Header, target, targetMarker)
 	targetNotice = addRoutingFundingSource(fundingCtx, seatAdmissionOf(deps.svc), target.Provider, target.Model, targetNotice)
 	if deps.isResponses {
-		if targetMarker != "" && (!deps.responseSwitch.passthrough() || supportsResponsesTerminalSurfaces(deps.facts.Client.ClientApp)) {
+		if targetMarker != "" && (!deps.responseSwitch.passthrough() || requestcontext.SupportsResponsesTerminalSurfaces(deps.facts.Client.ClientApp)) {
 			_, noticeErr := deps.responsesNotices.prepare(ctx, deps.responsesPreludeBuf, deps.responsesPreludeBuf, translate.FormatOpenAIResponses, deps.env.Stream(), targetNotice)
 			if noticeErr != nil {
 				return nil, fmt.Errorf("emit Responses router notice: %w", noticeErr)
@@ -219,7 +221,7 @@ func buildChatAttempt(ctx context.Context, deps chatAttemptDeps, target router.D
 				}
 				*deps.respSummary = translate.ResponseSummary{UpstreamFinishReason: nativeTerminal.Signals().FinishReason}
 				*deps.nativeRespSummary = false
-				if nativeTerminal.Observed() && deps.svc.ResolveNativeOpenAIResponseSignals(actx) {
+				if nativeTerminal.Observed() && deps.svc.turnTelemetry.flags.resolveNativeOpenAIResponseSignals(actx) {
 					deps.respSummary.StopReason = nativeTerminal.Signals().FinishReason
 					deps.respSummary.ToolUseBlocks = nativeTerminal.Signals().ToolCalls
 					*deps.nativeRespSummary = true
@@ -246,13 +248,13 @@ func buildChatAttempt(ctx context.Context, deps chatAttemptDeps, target router.D
 			return err
 		}
 		return func(actx context.Context, d router.Decision, p dispatch.Upstream) error {
-			surface := deps.responseSwitch.surface(d.Provider, servedOnCodexSubscription(actx))
+			surface := deps.responseSwitch.surface(d.Provider, credentials.ServedOnCodexSubscription(actx))
 			gatewayKey := gatewayResponsesKey(actx, d.Provider)
-			stripPromptCacheKey := deps.svc.gatewayCaps.RejectsPromptCacheKey(gatewayKey)
+			stripPromptCacheKey := deps.svc.engine.GatewayCaps().RejectsPromptCacheKey(gatewayKey)
 			err := dispatchOpenAI(actx, d, p, surface, stripPromptCacheKey)
 			if err != nil && !stripPromptCacheKey && gatewayKey != "" && !committed(deps.preludeBuf) &&
 				providers.IsUpstreamPromptCacheKeyRejection(err) {
-				deps.svc.gatewayCaps.RememberRejectsPromptCacheKey(gatewayKey)
+				deps.svc.engine.GatewayCaps().RememberRejectsPromptCacheKey(gatewayKey)
 				stripPromptCacheKey = true
 				deps.log.Warn("Gateway rejected prompt_cache_key; retrying without the affinity hint",
 					"model", d.Model,
@@ -264,13 +266,13 @@ func buildChatAttempt(ctx context.Context, deps chatAttemptDeps, target router.D
 			}
 			if err == nil || surface == surfaceChat ||
 				committed(deps.preludeBuf) || !providers.IsUpstreamResponsesUnsupported(err) ||
-				codexSubscriptionModelRejected(err) {
+				credentials.CodexSubscriptionModelRejected(err) {
 				return err
 			}
 			if deps.responseSwitch.fallbackToChat(surface) != nil {
 				return err
 			}
-			deps.svc.gatewayCaps.RememberLacksResponses(deps.responsesEndpointKey)
+			deps.svc.engine.GatewayCaps().RememberLacksResponses(deps.responsesEndpointKey)
 			deps.log.Warn("OpenAI endpoint rejected the Responses API; retrying on chat/completions",
 				"model", d.Model,
 				"decision_provider", d.Provider)

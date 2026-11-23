@@ -13,6 +13,7 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/providers/anthropic"
 	"weave-os/router/internal/requestcontext"
@@ -42,10 +43,10 @@ func TestInboundClaudeOAuthStillRotatesManagedPool(t *testing.T) {
 				{AccountID: "synthetic-healthy-seat", AccessToken: "synthetic-healthy-seat"},
 			}}
 			client := anthropic.NewClient("synthetic-paid-key", upstream.URL)
-			service := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: catalog.ModelIDClaudeOpus48.String()}}, map[string]providers.Client{providers.ProviderAnthropic: client}, nil, nil, false, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String(), nil)).
+			service := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: catalog.ModelIDClaudeOpus48.String()}}, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: client}), nil, nil, false, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String(), nil)).
 				WithManagedSubscriptions(leaser).
 				WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
-			service.retrySleep = noopSleep
+			service.engine.SetRetrySleep(noopSleep)
 			ctx := enterpriseOnlyContext(managedSubscriptionTestContext())
 			ctx = context.WithValue(ctx, requestcontext.InstallationIDContextKey{}, "11111111-1111-1111-1111-111111111111")
 			ctx = context.WithValue(ctx, requestcontext.InstallationSubscriptionStateModelsEnabledContextKey{}, stateModels)
@@ -61,7 +62,7 @@ func TestInboundClaudeOAuthStillRotatesManagedPool(t *testing.T) {
 			require.Contains(t, recorder.Body.String(), "pooled answer")
 			require.Equal(t, []string{"Bearer synthetic-limited-seat", "Bearer synthetic-healthy-seat"}, authorizations)
 			require.Equal(t, []string{"synthetic-limited-seat"}, leaser.cooldownIDs)
-			require.True(t, managedSubscriptionServed(ctx))
+			require.True(t, credentials.ManagedSubscriptionServed(ctx))
 		})
 	}
 }
@@ -73,20 +74,20 @@ func TestResolvedOAuthUsesEnrolledPool(t *testing.T) {
 		model                string
 		source               string
 	}{
-		{providers.ProviderAnthropic, auth.SubscriptionProviderClaude, catalog.ModelIDClaudeOpus48.String(), credSourceSubscription},
-		{providers.ProviderOpenAI, auth.SubscriptionProviderCodex, codexCoveredModel, credSourceCodexSubscription},
+		{providers.ProviderAnthropic, auth.SubscriptionProviderClaude, catalog.ModelIDClaudeOpus48.String(), requestcontext.SourceSubscription},
+		{providers.ProviderOpenAI, auth.SubscriptionProviderCodex, codexCoveredModel, requestcontext.SourceCodexSubscription},
 	} {
 		t.Run(scenario.provider, func(t *testing.T) {
 			leaser := &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "synthetic-seat", AccessToken: "synthetic-managed-token"}}}
 			service := newServiceWithProviders(t, nil).WithManagedSubscriptions(leaser)
-			ctx := context.WithValue(managedSubscriptionContext(scenario.subscriptionProvider), CredentialsContextKey{}, &Credentials{APIKey: []byte("synthetic-inbound-token"), OAuth: true, Source: scenario.source})
+			ctx := context.WithValue(managedSubscriptionContext(scenario.subscriptionProvider), requestcontext.CredentialsContextKey{}, &requestcontext.Credentials{APIKey: []byte("synthetic-inbound-token"), OAuth: true, Source: scenario.source})
 
 			pooled, lease, managed, err := service.leaseManagedSubscription(ctx, scenario.provider, scenario.model)
 
 			require.NoError(t, err)
 			require.True(t, managed)
 			require.Equal(t, "synthetic-seat", lease.AccountID)
-			require.Equal(t, "synthetic-managed-token", string(CredentialsFromContext(pooled).APIKey))
+			require.Equal(t, "synthetic-managed-token", string(credentials.CredentialsFromContext(pooled).APIKey))
 			lease.Release()
 		})
 	}
@@ -108,8 +109,8 @@ func TestResolvedOAuthSurvivesPoolLeaseFailure(t *testing.T) {
 		model                string
 		source               string
 	}{
-		{providers.ProviderAnthropic, auth.SubscriptionProviderClaude, catalog.ModelIDClaudeOpus48.String(), credSourceSubscription},
-		{providers.ProviderOpenAI, auth.SubscriptionProviderCodex, codexCoveredModel, credSourceCodexSubscription},
+		{providers.ProviderAnthropic, auth.SubscriptionProviderClaude, catalog.ModelIDClaudeOpus48.String(), requestcontext.SourceSubscription},
+		{providers.ProviderOpenAI, auth.SubscriptionProviderCodex, codexCoveredModel, requestcontext.SourceCodexSubscription},
 	} {
 		for _, canceled := range []bool{false, true} {
 			t.Run(scenario.provider+"/canceled="+boolLit(canceled), func(t *testing.T) {
@@ -118,9 +119,9 @@ func TestResolvedOAuthSurvivesPoolLeaseFailure(t *testing.T) {
 					leaseErr = context.Canceled
 				}
 				service := newServiceWithProviders(t, nil).WithManagedSubscriptions(&failedPoolLeaser{err: leaseErr})
-				oauth := &Credentials{APIKey: []byte("synthetic-inbound-token"), OAuth: true, Source: scenario.source}
+				oauth := &requestcontext.Credentials{APIKey: []byte("synthetic-inbound-token"), OAuth: true, Source: scenario.source}
 				ctx := enterpriseOnlyContext(managedSubscriptionContext(scenario.subscriptionProvider))
-				ctx, cancel := context.WithCancel(context.WithValue(ctx, CredentialsContextKey{}, oauth))
+				ctx, cancel := context.WithCancel(context.WithValue(ctx, requestcontext.CredentialsContextKey{}, oauth))
 				defer cancel()
 				if canceled {
 					cancel()
@@ -130,13 +131,13 @@ func TestResolvedOAuthSurvivesPoolLeaseFailure(t *testing.T) {
 
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
-					require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+					require.ErrorIs(t, err, credentials.ErrSubscriptionPoolUnavailable)
 					return
 				}
 				require.NoError(t, err)
 				require.False(t, managed)
 				require.Empty(t, lease.AccountID)
-				require.Same(t, oauth, CredentialsFromContext(direct))
+				require.Same(t, oauth, credentials.CredentialsFromContext(direct))
 			})
 		}
 	}
@@ -145,18 +146,18 @@ func TestResolvedOAuthSurvivesPoolLeaseFailure(t *testing.T) {
 func TestResolvedOAuthSurvivesOutOfSnapshotLease(t *testing.T) {
 	leaser := &scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "synthetic-new-seat", AccessToken: "synthetic-new-token"}}}
 	service := newServiceWithProviders(t, nil).WithManagedSubscriptions(leaser)
-	ctx := WithManagedSubscriptionCandidates(enterpriseOnlyContext(managedSubscriptionTestContext()), []*auth.SubscriptionAccount{{
+	ctx := credentials.WithManagedSubscriptionCandidates(enterpriseOnlyContext(managedSubscriptionTestContext()), []*auth.SubscriptionAccount{{
 		ID: "synthetic-admitted-seat", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive,
 	}})
-	oauth := &Credentials{APIKey: []byte(parityAnthropicToken), OAuth: true, Source: credSourceSubscription}
-	ctx = context.WithValue(ctx, CredentialsContextKey{}, oauth)
+	oauth := &requestcontext.Credentials{APIKey: []byte(parityAnthropicToken), OAuth: true, Source: requestcontext.SourceSubscription}
+	ctx = context.WithValue(ctx, requestcontext.CredentialsContextKey{}, oauth)
 
 	direct, lease, managed, err := service.leaseManagedSubscription(ctx, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String())
 
 	require.NoError(t, err)
 	require.False(t, managed)
 	require.Empty(t, lease.AccountID)
-	require.Same(t, oauth, CredentialsFromContext(direct), "an out-of-snapshot seat cannot displace the caller's own login")
+	require.Same(t, oauth, credentials.CredentialsFromContext(direct), "an out-of-snapshot seat cannot displace the caller's own login")
 }
 
 func TestResolvedOAuthRemainsAvailableWithoutManagedCapacity(t *testing.T) {
@@ -174,7 +175,7 @@ func TestResolvedOAuthRemainsAvailableWithoutManagedCapacity(t *testing.T) {
 		}, false},
 		{"explicit own-plan pick", func(ctx context.Context) context.Context {
 			ctx = context.WithValue(ctx, credentials.AnthropicSubscriptionContextKey{}, parityAnthropicToken)
-			return fundOnOwnPlan(ctx, providers.ProviderAnthropic)
+			return credentials.FundOnOwnPlan(ctx, providers.ProviderAnthropic)
 		}, true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -183,15 +184,15 @@ func TestResolvedOAuthRemainsAvailableWithoutManagedCapacity(t *testing.T) {
 				leaser.leases = []subscriptions.Lease{{AccountID: "synthetic-seat", AccessToken: "synthetic-managed-token"}}
 			}
 			service := newServiceWithProviders(t, nil).WithManagedSubscriptions(leaser)
-			oauth := &Credentials{APIKey: []byte(parityAnthropicToken), OAuth: true, Source: credSourceSubscription}
-			ctx := scenario.adjust(context.WithValue(managedSubscriptionTestContext(), CredentialsContextKey{}, oauth))
+			oauth := &requestcontext.Credentials{APIKey: []byte(parityAnthropicToken), OAuth: true, Source: requestcontext.SourceSubscription}
+			ctx := scenario.adjust(context.WithValue(managedSubscriptionTestContext(), requestcontext.CredentialsContextKey{}, oauth))
 
 			direct, lease, managed, err := service.leaseManagedSubscription(ctx, providers.ProviderAnthropic, catalog.ModelIDClaudeOpus48.String())
 
 			require.NoError(t, err)
 			require.False(t, managed)
 			require.Empty(t, lease.AccountID)
-			require.Same(t, oauth, CredentialsFromContext(direct))
+			require.Same(t, oauth, credentials.CredentialsFromContext(direct))
 		})
 	}
 }

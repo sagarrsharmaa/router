@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/observability"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/router"
@@ -70,7 +71,7 @@ func expiredSessionPin(
 	}
 }
 
-func (s *Service) expireSessionPinAndHMMHistory(
+func (s *Service) expireSessionPinAndSwitchHistory(
 	ctx context.Context, strategy router.Strategy,
 	installationID uuid.UUID,
 	sessionKey [sessionpin.SessionKeyLen]byte,
@@ -80,7 +81,7 @@ func (s *Service) expireSessionPinAndHMMHistory(
 	if err := s.expireSessionPin(ctx, strategy, installationID, sessionKey, role, reason); err != nil {
 		return err
 	}
-	historyRole := hmmHistoryRole(role)
+	historyRole := s.strategyPorts.History.HistoryRole(role)
 	if historyRole == role {
 		return nil
 	}
@@ -158,9 +159,9 @@ func (s *Service) maybeExpireSubscriptionArmPin(
 
 func subscriptionArmPinEvictionReason(err error) string {
 	switch {
-	case isSubscriptionPoolError(err):
+	case credentials.IsSubscriptionPoolError(err):
 		return pinEvictionReasonSubscriptionPool
-	case anthropicSubscriptionModelRejected(err):
+	case credentials.AnthropicSubscriptionModelRejected(err):
 		return pinEvictionReasonSubscriptionModel
 	default:
 		return ""

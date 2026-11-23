@@ -14,10 +14,11 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/credentials/usage"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/providers/anthropic"
 	"weave-os/router/internal/providers/openai"
-	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/subscriptions"
@@ -61,12 +62,12 @@ func TestSpentOwnClaudePlanNudgesOnlyWithoutACoveringLinkedSeat(t *testing.T) {
 			observer := usage.NewObserver([]byte("salt"), time.Hour, time.Now)
 			observer.Record(observer.Key([]byte(ownToken)), usage.Snapshot{Secondary: usage.Window{UsedPercent: 1.0, WindowMinutes: 10080}})
 			model := "claude-sonnet-4-6"
-			svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: model, Reason: "test"}}, map[string]providers.Client{providers.ProviderAnthropic: anthropic.NewClient("synthetic-paid-key", upstream.URL)}, nil, nil, false, providers.ProviderAnthropic, model, nil)).
+			svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: model, Reason: "test"}}, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: anthropic.NewClient("synthetic-paid-key", upstream.URL)}), nil, nil, false, providers.ProviderAnthropic, model, nil)).
 				WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: tc.leases, repeatLast: true}).
 				WithUsageObserver(observer).
 				WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
 			resetAt := time.Now().Add(time.Hour)
-			ctx := WithManagedSubscriptionCandidates(managedSubscriptionContext(auth.SubscriptionProviderClaude), []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: tc.seatState, CooldownUntil: &resetAt}})
+			ctx := credentials.WithManagedSubscriptionCandidates(managedSubscriptionContext(auth.SubscriptionProviderClaude), []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: tc.seatState, CooldownUntil: &resetAt}})
 			ctx = context.WithValue(ctx, credentials.AnthropicSubscriptionContextKey{}, ownToken)
 			body := `{"model":"` + model + `","stream":true,"max_tokens":1024,"messages":[{"role":"user","content":"hello"}]}`
 			rec := httptest.NewRecorder()
@@ -111,7 +112,7 @@ func TestSpentOwnCodexPlanNudgesOnlyWithoutACoveringLinkedSeat(t *testing.T) {
 				lease.AccessToken = "pool-seat"
 				leases = append(leases, lease)
 			}
-			svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: codexCoveredModel, Reason: "test"}}, map[string]providers.Client{providers.ProviderOpenAI: client}, nil, nil, false, providers.ProviderOpenAI, codexCoveredModel, nil)).
+			svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: codexCoveredModel, Reason: "test"}}, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: client}), nil, nil, false, providers.ProviderOpenAI, codexCoveredModel, nil)).
 				WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: leases, repeatLast: true}).
 				WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderOpenAI: {}}).
 				WithUsageObserver(usage.NewObserver([]byte("test-salt"), time.Hour, time.Now))
@@ -121,7 +122,7 @@ func TestSpentOwnCodexPlanNudgesOnlyWithoutACoveringLinkedSeat(t *testing.T) {
 			var responses []string
 			for turn := 0; turn < 2; turn++ {
 				ctx := context.WithValue(managedSubscriptionContext(auth.SubscriptionProviderCodex), requestcontext.InstallationIDContextKey{}, "11111111-1111-1111-1111-111111111111")
-				ctx = WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderCodex, State: tc.seatState, Enabled: true, CooldownUntil: &resetAt}})
+				ctx = credentials.WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderCodex, State: tc.seatState, Enabled: true, CooldownUntil: &resetAt}})
 				rec := httptest.NewRecorder()
 				require.NoError(t, svc.ProxyOpenAIChatCompletion(ctx, []byte(body), rec, codexSubHTTPRequest(t.Context(), "/v1/chat/completions", body)))
 				require.Contains(t, rec.Body.String(), "answer")
@@ -163,11 +164,11 @@ func TestSpentOwnClaudePlanNudgesWhenTheLastLinkedSeatRunsOutMidTurn(t *testing.
 	observer := usage.NewObserver([]byte("salt"), time.Hour, time.Now)
 	observer.Record(observer.Key([]byte(ownToken)), usage.Snapshot{Secondary: usage.Window{UsedPercent: 1.0, WindowMinutes: 10080}})
 	model := "claude-sonnet-4-6"
-	svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: model, Reason: "test"}}, map[string]providers.Client{providers.ProviderAnthropic: anthropic.NewClient("synthetic-paid-key", upstream.URL)}, nil, nil, false, providers.ProviderAnthropic, model, nil)).
+	svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderAnthropic, Model: model, Reason: "test"}}, dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: anthropic.NewClient("synthetic-paid-key", upstream.URL)}), nil, nil, false, providers.ProviderAnthropic, model, nil)).
 		WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "teammate", AccessToken: "sk-ant-oat01-teammate", ProviderAccount: "teammate-provider", Tier: auth.SubscriptionTierShared}}}).
 		WithUsageObserver(observer).
 		WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderAnthropic: {}})
-	ctx := WithManagedSubscriptionCandidates(managedSubscriptionContext(auth.SubscriptionProviderClaude), []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
+	ctx := credentials.WithManagedSubscriptionCandidates(managedSubscriptionContext(auth.SubscriptionProviderClaude), []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderClaude, Enabled: true, State: auth.SubscriptionAccountStateActive}})
 	ctx = context.WithValue(ctx, credentials.AnthropicSubscriptionContextKey{}, ownToken)
 	body := `{"model":"` + model + `","stream":true,"max_tokens":1024,"messages":[{"role":"user","content":"hello"}]}`
 	rec := httptest.NewRecorder()
@@ -208,8 +209,8 @@ func TestSpentOwnCodexPlanNudgesWhenTheLastLinkedSeatRunsOutMidTurn(t *testing.T
 			client := openai.NewClient("weave-capacity", server.URL)
 			client.SetCodexBaseURL(server.URL)
 			observer := usage.NewObserver([]byte("test-salt"), time.Hour, time.Now)
-			observer.Record(observer.Key([]byte(codexTestToken)), usage.Snapshot{Primary: usage.Window{UsedPercent: 1, WindowMinutes: codexQuotaWindowMinutes, ResetAt: time.Now().Add(3 * time.Hour)}})
-			svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: codexCoveredModel, Reason: "test"}}, map[string]providers.Client{providers.ProviderOpenAI: client}, nil, nil, false, providers.ProviderOpenAI, codexCoveredModel, nil)).
+			observer.Record(observer.Key([]byte(codexTestToken)), usage.Snapshot{Primary: usage.Window{UsedPercent: 1, WindowMinutes: credentials.CodexQuotaWindowMinutes, ResetAt: time.Now().Add(3 * time.Hour)}})
+			svc := withHMMPorts(NewService(staticRouter{decision: router.Decision{Provider: providers.ProviderOpenAI, Model: codexCoveredModel, Reason: "test"}}, dispatch.NewClients(map[string]providers.Client{providers.ProviderOpenAI: client}), nil, nil, false, providers.ProviderOpenAI, codexCoveredModel, nil)).
 				WithManagedSubscriptions(&scriptedSubscriptionLeaser{leases: []subscriptions.Lease{{AccountID: "teammate", AccessToken: "pool-seat", ProviderAccount: "teammate-provider", Tier: auth.SubscriptionTierShared}}, repeatLast: true}).
 				WithDeploymentKeyedProviders(map[string]struct{}{providers.ProviderOpenAI: {}}).
 				WithUsageObserver(observer)
@@ -222,7 +223,7 @@ func TestSpentOwnCodexPlanNudgesWhenTheLastLinkedSeatRunsOutMidTurn(t *testing.T
 			var turnBodies []string
 			for turn = 0; turn < 2; turn++ {
 				ctx := context.WithValue(managedSubscriptionContext(auth.SubscriptionProviderCodex), requestcontext.InstallationIDContextKey{}, "11111111-1111-1111-1111-111111111111")
-				ctx = WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderCodex, State: auth.SubscriptionAccountStateActive, Enabled: true}})
+				ctx = credentials.WithManagedSubscriptionCandidates(ctx, []*auth.SubscriptionAccount{{ID: "teammate", Provider: auth.SubscriptionProviderCodex, State: auth.SubscriptionAccountStateActive, Enabled: true}})
 				rec := httptest.NewRecorder()
 				if ingress == "responses" {
 					ctx = context.WithValue(ctx, ClientIdentityContextKey{}, ClientIdentity{ClientApp: requestcontext.ClientAppCodex})
@@ -246,7 +247,7 @@ func TestDeferredReconnectNudgeShowsOnAPaidTurnWithoutARoutingMarker(t *testing.
 	notice := reconnectNoticeForAttempt(ctx, http.Header{}, unmarked)
 	require.Equal(t, translate.NoticeSubscriptionReconnect, notice.Kind)
 	require.Equal(t, ownClaudePlanSpentNudge, notice.Text)
-	onSeat := context.WithValue(ctx, CredentialsContextKey{}, &Credentials{OAuth: true})
+	onSeat := context.WithValue(ctx, requestcontext.CredentialsContextKey{}, &requestcontext.Credentials{OAuth: true})
 	require.Equal(t, unmarked, reconnectNoticeForAttempt(onSeat, http.Header{}, unmarked), "a linked seat keeps the turn on a subscription")
 	optedOut := http.Header{routingMarkerHeader: []string{"off"}}
 	require.Empty(t, reconnectNoticeForAttempt(ctx, optedOut, unmarked).Text, "an explicit marker opt-out still hides the nudge")

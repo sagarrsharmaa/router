@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"weave-os/router/internal/auth"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/policyregistry"
 	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/router/hmm"
@@ -53,7 +54,7 @@ func TestThreadHandshakeRunsServingAdmissionAfterCredentialAuth(t *testing.T) {
 	decisions, err := policyregistry.NewAdmissionDecisionCache(admissionStore, 10, time.Minute, time.Now)
 	require.NoError(t, err)
 	engine := gin.New()
-	server.RegisterWithFeatures(engine, authSvc, nil, nil, server.DeploymentModeManaged, nil, nil, nil, nil, server.Features{ServingAdmission: &middleware.ServingAdmissionConfig{Decisions: decisions}})
+	server.RegisterWithFeatures(engine, authSvc, server.Services{}, nil, server.DeploymentModeManaged, nil, nil, nil, nil, server.Features{ServingAdmission: &middleware.ServingAdmissionConfig{Decisions: decisions}})
 	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/router/threads", strings.NewReader(`{}`))
 	request.Header.Set(auth.RouterKeyHeader, "rk_thread")
 	response := httptest.NewRecorder()
@@ -111,11 +112,11 @@ func TestSessionCostRouteAcceptsReadKeysWithoutServingAdmission(t *testing.T) {
 	authSvc := auth.NewService(nil, repo, nil, nil, auth.NoOpAPIKeyCache{}, nil, time.Now).
 		WithCredentialSubjectLookup(readSubjectRepo{"subject-disabled": {ID: "subject-disabled", ProjectionComplete: true, AccessEnabled: false, EnrollmentGeneration: 1}})
 	telemetry := &costTelemetry{}
-	proxySvc := proxy.WithStrategyPorts(proxy.NewService(nil, nil, nil, nil, false, "", "", telemetry), hmm.ServingPorts())
+	proxySvc := proxy.WithStrategyPorts(proxy.NewService(nil, dispatch.NewClients(nil), nil, nil, false, "", "", telemetry), hmm.ServingPorts())
 	engine := gin.New()
 	engine.UseRawPath = true
 	engine.UnescapePathValues = true
-	server.RegisterWithFeatures(engine, authSvc, proxySvc, nil, server.DeploymentModeManaged, nil, nil, nil, nil, server.Features{ServingAdmission: &middleware.ServingAdmissionConfig{}})
+	server.RegisterWithFeatures(engine, authSvc, proxyServices(proxySvc), nil, server.DeploymentModeManaged, nil, nil, nil, nil, server.Features{ServingAdmission: &middleware.ServingAdmissionConfig{}, TelemetryQueries: turnrecord.Queries{Repo: telemetry}})
 
 	serve := func(method, path, token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), method, path, nil)

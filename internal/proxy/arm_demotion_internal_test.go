@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"weave-os/router/internal/auth"
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/candidates"
+	"weave-os/router/internal/router/hmm"
 	"weave-os/router/internal/router/policy"
 	"weave-os/router/internal/router/sessionpin"
 	"weave-os/router/internal/translate"
@@ -94,7 +96,7 @@ func (s *demotionStubPinStore) SweepExpired(context.Context) error { return nil 
 func newDemotionTestService(store sessionpin.Store, flagOn bool) *Service {
 	return withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -129,7 +131,7 @@ func TestMaybeDemoteArmAfterUnrescuedStall(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &demotionStubPinStore{}
-			svc := withHMMPorts(NewService(nil, nil, nil, store, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
+			svc := withHMMPorts(NewService(nil, dispatch.NewClients(nil), nil, store, false, providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 				WithRescuedFailureArmDemotion(tc.flagOn)
 			ctx := context.Background()
 			if tc.cancelled {
@@ -212,7 +214,7 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_Classification(t *testing.T) 
 			assert.Equal(t, demotedArm, demoted)
 			assert.Equal(t, []demotionCall{
 				{role: sessionpin.DefaultRole, model: demotedArm, reason: sessionpin.DemotionReasonCommittedStreamFailure},
-				{role: hmmHistoryRole(sessionpin.DefaultRole), model: demotedArm, reason: sessionpin.DemotionReasonCommittedStreamFailure},
+				{role: hmm.HistoryRole(sessionpin.DefaultRole), model: demotedArm, reason: sessionpin.DemotionReasonCommittedStreamFailure},
 			}, store.demotions, "the strike must land on both rows the next turn merges")
 			assert.Empty(t, store.upserts, "expiry must ride the guarded demotion write, not a plain upsert")
 			require.Len(t, store.expired, 2, "demotion must expire the pin and its HMM history row")
@@ -220,7 +222,7 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_Classification(t *testing.T) 
 			assert.Equal(t, sessionpin.DefaultRole, expired.Role)
 			assert.Equal(t, installationID, expired.InstallationID)
 			assert.Equal(t, router.StrategyFromContext(ctx), expired.Strategy, "the write must be guarded by this request's strategy")
-			assert.Equal(t, hmmHistoryRole(sessionpin.DefaultRole), store.expired[1].Role)
+			assert.Equal(t, hmm.HistoryRole(sessionpin.DefaultRole), store.expired[1].Role)
 			assert.Empty(t, expired.Model, "expired pin must clear model so loadPin discards it")
 			assert.True(t, expired.PinnedUntil.Before(time.Now()))
 			assert.Equal(t, string(sessionpin.DemotionReasonCommittedStreamFailure), expired.Reason)
@@ -334,7 +336,7 @@ func TestDemotionRoles(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, demotionRoles(tc.role, tc.pinRole))
+			assert.Equal(t, tc.want, demotionRoles(hmm.ServingPorts().History, tc.role, tc.pinRole))
 		})
 	}
 }
@@ -452,7 +454,7 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_PersistsWithoutExistingRow(t 
 		role string
 	}{
 		{name: "base role", role: sessionpin.DefaultRole},
-		{name: "hmm history role", role: hmmHistoryRole(sessionpin.DefaultRole)},
+		{name: "hmm history role", role: hmm.HistoryRole(sessionpin.DefaultRole)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -470,7 +472,7 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_PersistsWithoutExistingRow(t 
 				tc.role, sessionpin.DefaultRole)
 
 			assert.Equal(t, demotedArm, demoted)
-			for _, role := range []string{sessionpin.DefaultRole, hmmHistoryRole(sessionpin.DefaultRole)} {
+			for _, role := range []string{sessionpin.DefaultRole, hmm.HistoryRole(sessionpin.DefaultRole)} {
 				row, ok := store.rows[role]
 				require.True(t, ok, "demotion must seed row %q", role)
 				assert.Equal(t, []string{demotedArm}, row.DemotedModels, "row %q", role)
@@ -483,7 +485,7 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_PersistsWithoutExistingRow(t 
 func newRescuedDemotionTestService(store sessionpin.Store, flagOn bool) *Service {
 	return withHMMPorts(NewService(
 		nil,
-		nil,
+		dispatch.NewClients(nil),
 		nil,
 		store,
 		false,
@@ -521,7 +523,7 @@ func TestMaybeDemoteArmAfterRescuedFailure_Classification(t *testing.T) {
 		{name: "no primary error", rescueRan: true, flagOn: true, err: nil, want: false},
 		{name: "provider overloaded 529", rescueRan: true, flagOn: true, err: &providers.UpstreamErrorResponse{Status: providerOverloadedStatus}, want: false},
 		{name: "gateway lacks model", rescueRan: true, flagOn: true, err: &providers.UpstreamErrorResponse{Status: http.StatusNotFound}, want: false},
-		{name: "subscription pool exhausted", rescueRan: true, flagOn: true, err: ErrSubscriptionPoolExhausted, want: false},
+		{name: "subscription pool exhausted", rescueRan: true, flagOn: true, err: credentials.ErrSubscriptionPoolExhausted, want: false},
 		{name: "client cancellation", rescueRan: true, flagOn: true, err: fmt.Errorf("copy body: %w", context.Canceled), want: false},
 		{name: "unrescued caller deadline", rescueRan: false, flagOn: true, err: context.DeadlineExceeded, want: false},
 		{name: "flag off", rescueRan: true, flagOn: false, err: &providers.UpstreamErrorResponse{Status: http.StatusBadGateway}, want: false},
@@ -554,7 +556,7 @@ func TestMaybeDemoteArmAfterRescuedFailure_Classification(t *testing.T) {
 			}
 			assert.Equal(t, []demotionCall{
 				{role: sessionpin.DefaultRole, model: demotedArm, reason: wantDemotionReason},
-				{role: hmmHistoryRole(sessionpin.DefaultRole), model: demotedArm, reason: wantDemotionReason},
+				{role: hmm.HistoryRole(sessionpin.DefaultRole), model: demotedArm, reason: wantDemotionReason},
 			}, store.demotions, "the strike must land on both rows the next turn merges")
 			assert.Empty(t, store.upserts, "expiry must ride the guarded demotion write, not a plain upsert")
 			require.Len(t, store.expired, 2, "demotion must expire the pin and its HMM history row")
@@ -587,14 +589,14 @@ func TestUnrescuedResponseHeaderTimeoutExcludesPrimaryOnNextTurn(t *testing.T) {
 	assert.Equal(t, demotedPinModel, demoted)
 	assert.Equal(t, sessionpin.DemotionReasonResponseHeaderTimeout, demotionReason)
 	require.Contains(t, store.rows[sessionpin.DefaultRole].DemotedModels, demotedPinModel)
-	require.Contains(t, store.rows[hmmHistoryRole(sessionpin.DefaultRole)].DemotedModels, demotedPinModel)
+	require.Contains(t, store.rows[hmm.HistoryRole(sessionpin.DefaultRole)].DemotedModels, demotedPinModel)
 
 	scorer := &authoritativeTestRouter{decision: router.Decision{
 		Provider: providers.ProviderAnthropic,
 		Model:    freshTurnModel,
 		Reason:   "response-header-timeout-next-turn",
 	}}
-	nextTurnService := withHMMPorts(NewService(nil, nil, nil, &rolePinStore{byRole: store.rows}, false,
+	nextTurnService := withHMMPorts(NewService(nil, dispatch.NewClients(nil), nil, &rolePinStore{byRole: store.rows}, false,
 		providers.ProviderAnthropic, "claude-haiku-4-5", nil)).
 		WithPolicyStrategy(policy.StrategySpec{
 			Strategy: strategy,
@@ -653,13 +655,13 @@ func TestRescuedAndCommittedDemotionsAreIndependentlyFlagged(t *testing.T) {
 			if tc.wantCommited != "" {
 				want = append(want,
 					demotionCall{role: sessionpin.DefaultRole, model: rescuer, reason: sessionpin.DemotionReasonCommittedStreamFailure},
-					demotionCall{role: hmmHistoryRole(sessionpin.DefaultRole), model: rescuer, reason: sessionpin.DemotionReasonCommittedStreamFailure},
+					demotionCall{role: hmm.HistoryRole(sessionpin.DefaultRole), model: rescuer, reason: sessionpin.DemotionReasonCommittedStreamFailure},
 				)
 			}
 			if tc.wantRescued != "" {
 				want = append(want,
 					demotionCall{role: sessionpin.DefaultRole, model: demotedArm, reason: sessionpin.DemotionReasonRescuedFailure},
-					demotionCall{role: hmmHistoryRole(sessionpin.DefaultRole), model: demotedArm, reason: sessionpin.DemotionReasonRescuedFailure},
+					demotionCall{role: hmm.HistoryRole(sessionpin.DefaultRole), model: demotedArm, reason: sessionpin.DemotionReasonRescuedFailure},
 				)
 			}
 			assert.Equal(t, want, store.demotions)
@@ -753,7 +755,7 @@ func TestMaybeDemoteArmAfterRescuedFailure_PersistsWithoutExistingRow(t *testing
 		rescuedPrimaryDecision("hmm:authoritative model=claude-opus-4-7"), sessionTarget{strategy: router.StrategyFromContext(context.Background()), installationID: uuid.New(), sessionKey: nonZeroSessionKey()})
 
 	assert.Equal(t, demotedArm, demoted)
-	for _, role := range []string{sessionpin.DefaultRole, hmmHistoryRole(sessionpin.DefaultRole)} {
+	for _, role := range []string{sessionpin.DefaultRole, hmm.HistoryRole(sessionpin.DefaultRole)} {
 		row, ok := store.rows[role]
 		require.True(t, ok, "eviction must seed row %q before the demotion writes to it", role)
 		assert.Equal(t, []string{demotedArm}, row.DemotedModels, "row %q", role)
@@ -787,7 +789,7 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_LateFailureLeavesReplacementS
 	}
 	require.NoError(t, store.Upsert(context.Background(), betaPin))
 	betaHistory := betaPin
-	betaHistory.Role = hmmHistoryRole(sessionpin.DefaultRole)
+	betaHistory.Role = hmm.HistoryRole(sessionpin.DefaultRole)
 	require.NoError(t, store.Upsert(context.Background(), betaHistory))
 	store.upserts = nil
 
@@ -808,8 +810,8 @@ func TestMaybeDemoteArmAfterCommittedStreamFailure_LateFailureLeavesReplacementS
 		assert.Equal(t, router.StrategyHMM, expired.Strategy, "row %q: the write must carry the failing request's strategy", expired.Role)
 	}
 	for role, want := range map[string]sessionpin.Pin{
-		sessionpin.DefaultRole:                 betaPin,
-		hmmHistoryRole(sessionpin.DefaultRole): betaHistory,
+		sessionpin.DefaultRole:                  betaPin,
+		hmm.HistoryRole(sessionpin.DefaultRole): betaHistory,
 	} {
 		row, ok := store.rows[role]
 		require.True(t, ok, "row %q", role)

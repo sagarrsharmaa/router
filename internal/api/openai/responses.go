@@ -1,20 +1,24 @@
 package openai
 
 import (
+	"context"
 	"io"
 	"net/http"
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/observability"
-	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/server/middleware"
 
 	"github.com/gin-gonic/gin"
 )
 
-func ResponsesHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc {
+type Responses interface {
+	ProxyOpenAIResponses(ctx context.Context, body []byte, w http.ResponseWriter, r *http.Request) error
+}
+
+func ResponsesHandler(svc Responses, authSvc *auth.Service, vocab ingress.ErrorVocabulary) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		log := observability.FromGin(c)
 
@@ -43,7 +47,7 @@ func ResponsesHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc
 		c.Request = c.Request.WithContext(ctx)
 
 		if err := svc.ProxyOpenAIResponses(c.Request.Context(), body, c.Writer, c.Request); err != nil {
-			cls, ok := proxy.ClassifyDispatchError(err)
+			cls, ok := vocab.Classify(err)
 			if ok && cls.Kind == ingress.DispatchErrorUpstreamStatus {
 				if c.Writer.Written() {
 					return
@@ -63,11 +67,11 @@ func ResponsesHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc
 				if cls.NoClientRetry {
 					c.Header("x-should-retry", "false")
 				}
-				writeOpenAIErrorWithCode(c, cls.Status, openAIErrorType(cls), cls.Message, proxy.OpenAIErrorCode(cls.Kind))
+				writeOpenAIErrorWithCode(c, cls.Status, openAIErrorType(cls), cls.Message, ingress.OpenAIErrorCode(cls.Kind))
 				return
 			}
 			log.Error("Proxy failed", "err", err)
-			writeOpenAIError(c, http.StatusBadGateway, "api_error", proxy.TerminalErrorMessage(err))
+			writeOpenAIError(c, http.StatusBadGateway, "api_error", vocab.TerminalMessage(err))
 			return
 		}
 	}

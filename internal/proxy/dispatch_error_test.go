@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"weave-os/router/internal/billing"
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
@@ -29,7 +30,7 @@ func TestClassifyDispatchError_UnknownErrorIsUnmatched(t *testing.T) {
 }
 
 func TestClassifyDispatchError_ClaudeEnterpriseOnlyIsNotRetryable(t *testing.T) {
-	classification, ok := proxy.ClassifyDispatchError(fmt.Errorf("dispatch: %w", proxy.ErrClaudeEnterpriseSubscriptionUnavailable))
+	classification, ok := proxy.ClassifyDispatchError(fmt.Errorf("dispatch: %w", credentials.ErrClaudeEnterpriseSubscriptionUnavailable))
 	require.True(t, ok)
 	require.Equal(t, http.StatusPaymentRequired, classification.Status)
 	require.True(t, classification.NoClientRetry)
@@ -56,9 +57,9 @@ func TestClassifyDispatchError_SubscriptionPoolFailures(t *testing.T) {
 		statusCode int
 		logLevel   string
 	}{
-		{name: "exhausted", err: proxy.ErrSubscriptionPoolExhausted, kind: ingress.DispatchErrorSubscriptionPoolExhausted, statusCode: http.StatusTooManyRequests, logLevel: "warn"},
-		{name: "unavailable", err: proxy.ErrSubscriptionPoolUnavailable, kind: ingress.DispatchErrorSubscriptionPoolUnavailable, statusCode: http.StatusServiceUnavailable, logLevel: "error"},
-		{name: "throttled", err: proxy.ErrSubscriptionPoolThrottled, kind: ingress.DispatchErrorSubscriptionPoolThrottled, statusCode: http.StatusTooManyRequests, logLevel: "warn"},
+		{name: "exhausted", err: credentials.ErrSubscriptionPoolExhausted, kind: ingress.DispatchErrorSubscriptionPoolExhausted, statusCode: http.StatusTooManyRequests, logLevel: "warn"},
+		{name: "unavailable", err: credentials.ErrSubscriptionPoolUnavailable, kind: ingress.DispatchErrorSubscriptionPoolUnavailable, statusCode: http.StatusServiceUnavailable, logLevel: "error"},
+		{name: "throttled", err: credentials.ErrSubscriptionPoolThrottled, kind: ingress.DispatchErrorSubscriptionPoolThrottled, statusCode: http.StatusTooManyRequests, logLevel: "warn"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -217,7 +218,7 @@ func TestClassifyDispatchError_RLAndHMMUnavailableRetry(t *testing.T) {
 }
 
 func TestClassifyDispatchError_SpendCapIs402WithoutTopUpCTA(t *testing.T) {
-	cls, ok := proxy.ClassifyDispatchError(proxy.ErrSpendCapSubscriptionUnavailable)
+	cls, ok := proxy.ClassifyDispatchError(credentials.ErrSpendCapSubscriptionUnavailable)
 
 	require.True(t, ok, "the spend-cap sentinel must be classified")
 	assert.Equal(t, ingress.DispatchErrorSpendCapReached, cls.Kind)
@@ -227,7 +228,7 @@ func TestClassifyDispatchError_SpendCapIs402WithoutTopUpCTA(t *testing.T) {
 }
 
 func TestClassifyDispatchError_CreditsExhaustedIs402(t *testing.T) {
-	cls, ok := proxy.ClassifyDispatchError(proxy.ErrCreditsExhaustedSubscriptionUnavailable)
+	cls, ok := proxy.ClassifyDispatchError(credentials.ErrCreditsExhaustedSubscriptionUnavailable)
 
 	require.True(t, ok, "the credits-exhausted sentinel must be classified")
 	assert.Equal(t, ingress.DispatchErrorCreditsExhausted, cls.Kind)
@@ -492,7 +493,7 @@ func TestClassifyDispatchError_SidecarOversizedBodyIsContextOverflowNotHMMUnavai
 	require.True(t, ok)
 	assert.Equal(t, ingress.DispatchErrorContextWindowExceeded, cls.Kind)
 	assert.Equal(t, http.StatusBadRequest, cls.Status)
-	assert.Equal(t, "context_length_exceeded", proxy.OpenAIErrorCode(cls.Kind))
+	assert.Equal(t, "context_length_exceeded", ingress.OpenAIErrorCode(cls.Kind))
 	assert.False(t, cls.RetryAfter)
 }
 

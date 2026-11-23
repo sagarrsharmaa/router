@@ -10,9 +10,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"weave-os/router/internal/routingpolicy"
 
 	"github.com/google/uuid"
 
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/flags"
 	"weave-os/router/internal/observability"
 	"weave-os/router/internal/policyregistry"
@@ -32,12 +34,12 @@ import (
 
 const agreementSol = "gpt-6.1-sol"
 
-func agreementFixture() (turnrecord.InsertTelemetryParams, turnLoopResult) {
+func agreementFixture() (turnrecord.InsertTelemetryParams, routingpolicy.TurnRoute) {
 	luna := catalog.ModelGPT6Luna
 	solArm := "openai/" + agreementSol
 	return turnrecord.InsertTelemetryParams{InstallationID: uuid.NewString(), RequestID: "synthetic-request", Timestamp: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
 			SessionKey: []byte("synthetic-thread"), Role: sessionpin.DefaultRole, TurnType: string(turntype.ToolResult), UpstreamStatusCode: http.StatusOK,
-			DecisionModel: luna, DecisionProvider: providers.ProviderOpenAI}, turnLoopResult{
+			DecisionModel: luna, DecisionProvider: providers.ProviderOpenAI}, routingpolicy.TurnRoute{
 			AuthoritativePerTurn: true, PinModel: luna, PinProvider: providers.ProviderOpenAI, PinPolicyGroup: string(escalation.Low),
 			Decision: router.Decision{Model: luna, Provider: providers.ProviderOpenAI},
 			Fresh: router.Decision{Model: agreementSol, Provider: providers.ProviderOpenAI, Metadata: &router.RoutingMetadata{
@@ -129,18 +131,20 @@ func TestAgreementShadowResumptionUsesNewEpochNamespace(t *testing.T) {
 func TestAgreementShadowUnsupportedAndMissingInputsBreakSegments(t *testing.T) {
 	for _, test := range []struct {
 		name  string
-		alter func(*turnLoopResult)
+		alter func(*routingpolicy.TurnRoute)
 		gap   switchpolicy.ShadowGap
 	}{
-		{"manual pin", func(r *turnLoopResult) { r.HardPinned = true }, switchpolicy.ShadowGapUnsupported},
-		{"unavailable manual pin", func(r *turnLoopResult) { r.ForcedPinDropped = true }, switchpolicy.ShadowGapUnsupported},
-		{"deadline fallback", func(r *turnLoopResult) { r.PolicyFallback = true }, switchpolicy.ShadowGapUnsupported},
-		{"no fresh classifier", func(r *turnLoopResult) { r.Fresh = router.Decision{} }, switchpolicy.ShadowGapUnsupported},
-		{"missing trace", func(r *turnLoopResult) { r.Fresh.Metadata.SelectionTrace = nil }, switchpolicy.ShadowGapMissing},
-		{"missing artifact", func(r *turnLoopResult) { r.Fresh.Metadata.ClassifierArtifactSHA256 = "" }, switchpolicy.ShadowGapMissing},
-		{"explicit floor", func(r *turnLoopResult) { r.Fresh.Metadata.SelectionTrace.ForcedGroup = string(escalation.Maximum) }, switchpolicy.ShadowGapUnsupported},
-		{"unchanged cluster allowlist", func(r *turnLoopResult) { r.Fresh.Metadata.SelectionTrace.ClusterOverridesPresent = true }, switchpolicy.ShadowGapUnsupported},
-		{"unreconstructable selection", func(r *turnLoopResult) { r.Fresh.Model = catalog.ModelGPT6Luna }, switchpolicy.ShadowGapMissing},
+		{"manual pin", func(r *routingpolicy.TurnRoute) { r.HardPinned = true }, switchpolicy.ShadowGapUnsupported},
+		{"unavailable manual pin", func(r *routingpolicy.TurnRoute) { r.ForcedPinDropped = true }, switchpolicy.ShadowGapUnsupported},
+		{"deadline fallback", func(r *routingpolicy.TurnRoute) { r.PolicyFallback = true }, switchpolicy.ShadowGapUnsupported},
+		{"no fresh classifier", func(r *routingpolicy.TurnRoute) { r.Fresh = router.Decision{} }, switchpolicy.ShadowGapUnsupported},
+		{"missing trace", func(r *routingpolicy.TurnRoute) { r.Fresh.Metadata.SelectionTrace = nil }, switchpolicy.ShadowGapMissing},
+		{"missing artifact", func(r *routingpolicy.TurnRoute) { r.Fresh.Metadata.ClassifierArtifactSHA256 = "" }, switchpolicy.ShadowGapMissing},
+		{"explicit floor", func(r *routingpolicy.TurnRoute) {
+			r.Fresh.Metadata.SelectionTrace.ForcedGroup = string(escalation.Maximum)
+		}, switchpolicy.ShadowGapUnsupported},
+		{"unchanged cluster allowlist", func(r *routingpolicy.TurnRoute) { r.Fresh.Metadata.SelectionTrace.ClusterOverridesPresent = true }, switchpolicy.ShadowGapUnsupported},
+		{"unreconstructable selection", func(r *routingpolicy.TurnRoute) { r.Fresh.Model = catalog.ModelGPT6Luna }, switchpolicy.ShadowGapMissing},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			p, res := agreementFixture()
@@ -190,7 +194,7 @@ func (r *agreementTelemetry) CompareAndSwapAgreementShadow(_ context.Context, _ 
 
 func TestAgreementShadowRecordsOnlyAfterBaselineTelemetryAndHandlesFailures(t *testing.T) {
 	store := &agreementTelemetry{auxTelemetryRepo: &auxTelemetryRepo{}, notify: make(chan struct{}, 1)}
-	svc := &Service{hmmServing: hmmPorts(), turnTelemetry: turnTelemetry{repo: store}}
+	svc := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), turnTelemetry: turnTelemetry{repo: store}}
 	p, res := agreementFixture()
 	applyAgreementShadowTelemetry(hmm.ServingPorts(), agreementContext(policyregistry.TargetInternal, true), &p, res)
 	svc.fireTelemetry(t.Context(), p)
@@ -223,7 +227,7 @@ func TestAgreementShadowRecordsOnlyAfterBaselineTelemetryAndHandlesFailures(t *t
 
 func TestAgreementShadowStoreErrorDoesNotLoseBaselineTelemetry(t *testing.T) {
 	store := &agreementTelemetry{auxTelemetryRepo: &auxTelemetryRepo{}, fail: true}
-	svc := &Service{hmmServing: hmmPorts(), turnTelemetry: turnTelemetry{repo: store}}
+	svc := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), turnTelemetry: turnTelemetry{repo: store}}
 	p, res := agreementFixture()
 	applyAgreementShadowTelemetry(hmm.ServingPorts(), agreementContext(policyregistry.TargetInternal, true), &p, res)
 	svc.fireTelemetry(t.Context(), p)
@@ -242,7 +246,7 @@ func (agreementFailureRouter) Route(context.Context, router.Request) (router.Dec
 func TestAgreementShadowRoutingRefusalBreaksHistoryWithoutDispatch(t *testing.T) {
 	store := &agreementTelemetry{auxTelemetryRepo: &auxTelemetryRepo{}, notify: make(chan struct{}, 1)}
 	pins := newStubPinStore()
-	svc := withHMMPorts(NewService(agreementFailureRouter{}, nil, nil, pins, false, providers.ProviderOpenAI, catalog.ModelGPT6Luna, store)).
+	svc := withHMMPorts(NewService(agreementFailureRouter{}, dispatch.NewClients(nil), nil, pins, false, providers.ProviderOpenAI, catalog.ModelGPT6Luna, store)).
 		WithPolicyStrategy(policy.StrategySpec{Strategy: router.StrategyHMM, Router: agreementFailureRouter{}, Capabilities: policy.Capabilities{AuthoritativePerTurnSelection: true}})
 	env, err := translate.ParseAnthropic([]byte(`{"model":"weave-auto","messages":[{"role":"user","content":"synthetic routing test"}]}`))
 	if err != nil {

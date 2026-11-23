@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"weave-os/router/internal/conversation"
+	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/telemetry"
+	"weave-os/router/internal/telemetry/capture"
 	"weave-os/router/internal/telemetry/turnrecord"
 	"weave-os/router/internal/translate"
 
@@ -19,15 +21,15 @@ func TestTurnSignalCaptureAllowed(t *testing.T) {
 	tests := []struct {
 		name            string
 		trainingAllowed bool
-		capture         ContentCaptureMode
+		capture         capture.Mode
 		want            bool
 	}{
-		{"full capture and training allowed", true, CaptureFull, true},
-		{"hashed capture and training allowed", true, CaptureHashed, true},
-		{"AI training opted out", false, CaptureFull, false},
-		{"zero retention", true, CaptureOff, false},
-		{"neither allowed", false, CaptureOff, false},
-		{"unknown capture mode", true, ContentCaptureMode(99), false},
+		{"full capture and training allowed", true, capture.Full, true},
+		{"hashed capture and training allowed", true, capture.Hashed, true},
+		{"AI training opted out", false, capture.Full, false},
+		{"zero retention", true, capture.Off, false},
+		{"neither allowed", false, capture.Off, false},
+		{"unknown capture mode", true, capture.Mode(99), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -37,7 +39,7 @@ func TestTurnSignalCaptureAllowed(t *testing.T) {
 }
 
 func TestTurnSignalCaptureAllowed_FailsClosedOnDefaults(t *testing.T) {
-	assert.False(t, turnSignalCaptureAllowed(false, ParseCaptureMode("")))
+	assert.False(t, turnSignalCaptureAllowed(false, capture.ParseMode("")))
 }
 
 func sampleSignals() conversation.SpiralSignals {
@@ -62,7 +64,7 @@ func sampleSignals() conversation.SpiralSignals {
 func TestApplyTurnSignalTelemetry_CopiesFullSnapshot(t *testing.T) {
 	var telemetry turnrecord.InsertTelemetryParams
 	reasons := []conversation.SpiralReason{conversation.SpiralReasonErrStreak, conversation.SpiralReasonPingPong}
-	applyTurnSignalTelemetry(&telemetry, sampleSignals(), reasons, true, true, CaptureFull)
+	applyTurnSignalTelemetry(&telemetry, sampleSignals(), reasons, true, true, capture.Full)
 
 	assertInt32Ptr := func(field string, got *int32, want int32) {
 		t.Helper()
@@ -88,7 +90,7 @@ func TestApplyTurnSignalTelemetry_CopiesFullSnapshot(t *testing.T) {
 
 func TestApplyTurnSignalTelemetry_QuietTurnRecordsZeros(t *testing.T) {
 	var telemetry turnrecord.InsertTelemetryParams
-	applyTurnSignalTelemetry(&telemetry, conversation.SpiralSignals{}, nil, true, true, CaptureFull)
+	applyTurnSignalTelemetry(&telemetry, conversation.SpiralSignals{}, nil, true, true, capture.Full)
 
 	require.NotNil(t, telemetry.SpiralErrStreak)
 	assert.Zero(t, *telemetry.SpiralErrStreak)
@@ -105,11 +107,11 @@ func TestApplyTurnSignalTelemetry_SkipsIneligibleTurns(t *testing.T) {
 		name            string
 		computed        bool
 		trainingAllowed bool
-		capture         ContentCaptureMode
+		capture         capture.Mode
 	}{
-		{"AI training opted out", true, false, CaptureFull},
-		{"zero retention", true, true, CaptureOff},
-		{"snapshot not computed", false, true, CaptureFull},
+		{"AI training opted out", true, false, capture.Full},
+		{"zero retention", true, true, capture.Off},
+		{"snapshot not computed", false, true, capture.Full},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,7 +131,7 @@ func TestApplyTurnSignalTelemetry_SkipsIneligibleTurns(t *testing.T) {
 
 func TestApplyTurnSignalTelemetry_NilParamsIsNoOp(t *testing.T) {
 	assert.NotPanics(t, func() {
-		applyTurnSignalTelemetry(nil, sampleSignals(), nil, true, true, CaptureFull)
+		applyTurnSignalTelemetry(nil, sampleSignals(), nil, true, true, capture.Full)
 	})
 }
 
@@ -148,7 +150,7 @@ func (c *memorySessionTurnClock) AdvanceSessionTurnClock(_ context.Context, adva
 
 func TestApplyUserPromptGap_TimesTypedPromptAgainstPreviousResponse(t *testing.T) {
 	clock := &memorySessionTurnClock{finishes: map[string]telemetry.SessionTurnClockReading{}}
-	service := (&Service{hmmServing: hmmPorts()}).WithSessionTurnClock(clock)
+	service := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), turnTelemetry: turnTelemetry{turnClock: clock}}
 	start := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	turn := func(offset time.Duration, latencyMs int64, turnType string, model string, typed bool) turnrecord.InsertTelemetryParams {
 		return turnrecord.InsertTelemetryParams{
@@ -187,7 +189,7 @@ func TestApplyUserPromptGap_TimesTypedPromptAgainstPreviousResponse(t *testing.T
 
 func TestApplyUserPromptGap_OverlappingPreviousResponseLeavesGapNull(t *testing.T) {
 	clock := &memorySessionTurnClock{finishes: map[string]telemetry.SessionTurnClockReading{}}
-	service := (&Service{hmmServing: hmmPorts()}).WithSessionTurnClock(clock)
+	service := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), turnTelemetry: turnTelemetry{turnClock: clock}}
 	start := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	typed := true
 	long := turnrecord.InsertTelemetryParams{
@@ -207,7 +209,7 @@ func TestApplyUserPromptGap_OverlappingPreviousResponseLeavesGapNull(t *testing.
 
 func TestApplyUserPromptGap_FailedTurnDoesNotMoveTheClock(t *testing.T) {
 	clock := &memorySessionTurnClock{finishes: map[string]telemetry.SessionTurnClockReading{}}
-	service := (&Service{hmmServing: hmmPorts()}).WithSessionTurnClock(clock)
+	service := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), turnTelemetry: turnTelemetry{turnClock: clock}}
 	start := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	typed := true
 	reply := turnrecord.InsertTelemetryParams{
@@ -247,7 +249,7 @@ func (c *deadlineRecordingClock) AdvanceSessionTurnClock(ctx context.Context, _ 
 
 func TestApplyUserPromptGap_ClockLeavesTheInsertItsBudget(t *testing.T) {
 	clock := &deadlineRecordingClock{}
-	service := (&Service{hmmServing: hmmPorts()}).WithSessionTurnClock(clock)
+	service := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), turnTelemetry: turnTelemetry{turnClock: clock}}
 	parent, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	parentDeadline, _ := parent.Deadline()

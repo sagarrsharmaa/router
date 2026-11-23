@@ -7,15 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/tidwall/sjson"
 
-	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/providers"
+	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
 	"weave-os/router/internal/sse"
@@ -37,18 +36,11 @@ func committed(b *dispatch.PreludeBuffer) bool {
 	return b.Committed()
 }
 
-const subscriptionRotationBudget = 10 * time.Second
-
-func (s *Service) WithClock(clock auth.Clock) *Service {
-	s.clock = clock
-	return s
-}
-
 func (s *Service) shouldFailover(ctx context.Context) bool {
 	if s.credentials.BYOKOnly {
 		return false
 	}
-	if CredentialsFromContext(ctx) != nil {
+	if credentials.CredentialsFromContext(ctx) != nil {
 		return false
 	}
 	if len(credentials.ExternalKeysFromContext(ctx)) > 0 {
@@ -60,13 +52,13 @@ func (s *Service) shouldFailover(ctx context.Context) bool {
 func (s *Service) resolveBindingsForDispatch(ctx context.Context, decision router.Decision) []catalog.ProviderBinding {
 	req := dispatch.BindingRequest{
 		Decision:   decision,
-		ImageCount: requestImageCountFromContext(ctx),
+		ImageCount: requestcontext.RequestImageCountFromContext(ctx),
 		UserForced: isUserForcedReason(decision.Reason),
 		ForceModel: decision.UserForcedModel(),
 	}
 	if s.shouldFailover(ctx) && s.credentials.KeyedProviders != nil {
 		req.DeploymentKeyedProviders = s.credentials.KeyedProviders
-		req.SubscriptionServes = managedSubscriptionCanServe(ctx, decision.Provider, decision.Model) && s.supportsSubscriptionTransport(decision.Provider)
+		req.SubscriptionServes = credentials.ManagedSubscriptionCanServe(ctx, decision.Provider, decision.Model) && s.supportsSubscriptionTransport(decision.Provider)
 		req.Excluded = s.excludedProvidersForRequest(ctx)
 	}
 	return dispatch.OrderedBindings(req)
@@ -114,46 +106,52 @@ func copyReplayedErrorHeaders(dst, upstream http.Header, bodyRewritten bool) {
 	}
 }
 
+type sseErrorFrame struct {
+	fallbackBody      string
+	prefix            string
+	translateUpstream func([]byte) []byte
+	classifiedBody    func(ingress.DispatchErrorClass) []byte
+}
+
+var (
+	anthropicSSEErrorFrame = sseErrorFrame{
+		fallbackBody:      `{"type":"error","error":{"type":"api_error","message":""}}`,
+		prefix:            "event: error\ndata: ",
+		translateUpstream: translate.OpenAIToAnthropicError,
+		classifiedBody:    anthropicErrorFrameBody,
+	}
+	openAISSEErrorFrame = sseErrorFrame{
+		fallbackBody:      `{"error":{"message":"","type":"server_error","code":"upstream_error"}}`,
+		prefix:            "data: ",
+		translateUpstream: translate.AnthropicErrorAsOpenAI,
+		classifiedBody:    openAIErrorFrameBody,
+	}
+)
+
 func emitAnthropicSSEErrorEvent(sink http.ResponseWriter, err error) error {
-	var resp *providers.UpstreamErrorResponse
-	status := http.StatusBadGateway
-	body, _ := sjson.SetBytes([]byte(`{"type":"error","error":{"type":"api_error","message":""}}`), "error.message", attributedStreamFailure(err))
-	switch cls, classified := ClassifyDispatchError(err); {
-	case classified && cls.Kind == ingress.DispatchErrorContextWindowExceeded:
-		status = cls.Status
-		body = anthropicErrorFrameBody(cls)
-	case errors.As(err, &resp):
-		status = resp.Status
-		body = attributedErrorBody(translate.OpenAIToAnthropicError(resp.Body), err)
-	case classified:
-		status = cls.Status
-		body = anthropicErrorFrameBody(cls)
-	}
-	_, _ = sink.Write([]byte("event: error\ndata: "))
-	_, _ = sse.WriteJSONChunk(sink, body)
-	_, _ = sink.Write([]byte("\n\n"))
-	if f, ok := sink.(http.Flusher); ok {
-		f.Flush()
-	}
-	return &providers.UpstreamStatusError{Status: status, Cause: err}
+	return emitSSEErrorEvent(sink, err, anthropicSSEErrorFrame)
 }
 
 func emitOpenAISSEErrorEvent(sink http.ResponseWriter, err error) error {
+	return emitSSEErrorEvent(sink, err, openAISSEErrorFrame)
+}
+
+func emitSSEErrorEvent(sink http.ResponseWriter, err error, frame sseErrorFrame) error {
 	var resp *providers.UpstreamErrorResponse
 	status := http.StatusBadGateway
-	body, _ := sjson.SetBytes([]byte(`{"error":{"message":"","type":"server_error","code":"upstream_error"}}`), "error.message", attributedStreamFailure(err))
+	body, _ := sjson.SetBytes([]byte(frame.fallbackBody), "error.message", attributedStreamFailure(err))
 	switch cls, classified := ClassifyDispatchError(err); {
 	case classified && cls.Kind == ingress.DispatchErrorContextWindowExceeded:
 		status = cls.Status
-		body = openAIErrorFrameBody(cls)
+		body = frame.classifiedBody(cls)
 	case errors.As(err, &resp):
 		status = resp.Status
-		body = attributedErrorBody(translate.AnthropicErrorAsOpenAI(resp.Body), err)
+		body = attributedErrorBody(frame.translateUpstream(resp.Body), err)
 	case classified:
 		status = cls.Status
-		body = openAIErrorFrameBody(cls)
+		body = frame.classifiedBody(cls)
 	}
-	_, _ = sink.Write([]byte("data: "))
+	_, _ = sink.Write([]byte(frame.prefix))
 	_, _ = sse.WriteJSONChunk(sink, body)
 	_, _ = sink.Write([]byte("\n\n"))
 	if f, ok := sink.(http.Flusher); ok {
@@ -168,7 +166,7 @@ func anthropicErrorFrameBody(cls ingress.DispatchErrorClass) []byte {
 }
 
 func openAIErrorFrameBody(cls ingress.DispatchErrorClass) []byte {
-	code := OpenAIErrorCode(cls.Kind)
+	code := ingress.OpenAIErrorCode(cls.Kind)
 	if code == "" {
 		code = "upstream_error"
 	}
@@ -197,17 +195,4 @@ func flushUpstreamErrorAsAnthropic(w http.ResponseWriter, err error) {
 
 func attemptIdxLabel(i int) string {
 	return strconv.Itoa(i)
-}
-
-type subscriptionOnlyAttemptKey struct{}
-type subscriptionAPIOnlyKey struct{}
-type subscriptionRotationBudgetKey struct{}
-
-func subscriptionAttemptOnly(ctx context.Context) bool {
-	value, _ := ctx.Value(subscriptionOnlyAttemptKey{}).(bool)
-	return value
-}
-func subscriptionAPIOnly(ctx context.Context) bool {
-	value, _ := ctx.Value(subscriptionAPIOnlyKey{}).(bool)
-	return value
 }

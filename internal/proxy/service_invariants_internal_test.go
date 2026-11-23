@@ -7,14 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"weave-os/router/internal/router/handover"
+	"weave-os/router/internal/routingpolicy"
 
 	"github.com/google/uuid"
 
 	"weave-os/router/internal/billing"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/credentials/usage"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/providers"
-	"weave-os/router/internal/proxy/usage"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router"
 	"weave-os/router/internal/router/catalog"
@@ -61,7 +63,7 @@ func (r *cancellationCheckingBillingRepo) DebitInference(ctx context.Context, p 
 
 func TestFireBilling_DebitsAfterClientCancellation(t *testing.T) {
 	repo := &cancellationCheckingBillingRepo{auxBillingRepo: &auxBillingRepo{}}
-	s := &Service{hmmServing: hmmPorts(), billing: billing.NewService(repo)}
+	s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), billing: billing.NewService(repo)}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -94,7 +96,7 @@ func (f *cancellationCheckingPinStore) Upsert(ctx context.Context, p sessionpin.
 
 func TestMaybeRepinOnRefusal_WritesAfterRequestCancellation(t *testing.T) {
 	store := &cancellationCheckingPinStore{repinFakeStore: &repinFakeStore{}}
-	s := &Service{hmmServing: hmmPorts(), pinStore: store, rescueConfig: dispatch.RescueConfig{CyberRefusalRepin: true, CyberRefusalFallbackModel: "claude-sonnet-5"}}
+	s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), pinStore: store, rescueConfig: dispatch.RescueConfig{CyberRefusalRepin: true, CyberRefusalFallbackModel: "claude-sonnet-5"}}
 	ctx, cancel := context.WithCancel(repinCtx())
 	cancel()
 
@@ -133,12 +135,12 @@ func (s *cancellationCheckingRecoveryStore) ClearDemotionCooldown(ctx context.Co
 
 func TestClearRecoveredCooldown_LandsAfterRequestCancellation(t *testing.T) {
 	store := &cancellationCheckingRecoveryStore{}
-	s := &Service{hmmServing: hmmPorts(), pinStore: store}
+	s := &Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts(), pinStore: store}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	observedUntil := time.Now().Add(-time.Second)
 
-	s.clearRecoveredCooldown(ctx, turnLoopResult{
+	clearRecoveredCooldown(ctx, s, routingpolicy.TurnRoute{
 		SessionKey:     [sessionpin.SessionKeyLen]byte{1},
 		CooldownProbes: map[string]time.Time{"recovered-model": observedUntil},
 	}, "recovered-model", nil)
@@ -188,18 +190,18 @@ func TestRefusalObserver_CategoryBeforeOverlapWindowIsKept(t *testing.T) {
 func TestEmitBilling_HandoverSummaryDebitedOnceAlongsideTurn(t *testing.T) {
 	cases := []struct {
 		name     string
-		handover dispatch.HandoverOutcome
+		handover handover.Outcome
 		want     []string
 	}{
-		{"no handover", dispatch.HandoverOutcome{}, []string{auxTestRequestID}},
-		{"summary served", dispatch.HandoverOutcome{Invoked: true, SummaryUsage: auxTestUsage()}, []string{auxTestRequestID, auxTestRequestID + auxSuffixHandoverSummary}},
-		{"fell back to full history", dispatch.HandoverOutcome{Invoked: true, FallbackToFullHistory: true, SummaryUsage: auxTestUsage()}, []string{auxTestRequestID}},
+		{"no handover", handover.Outcome{}, []string{auxTestRequestID}},
+		{"summary served", handover.Outcome{Invoked: true, SummaryUsage: auxTestUsage()}, []string{auxTestRequestID, auxTestRequestID + auxSuffixHandoverSummary}},
+		{"fell back to full history", handover.Outcome{Invoked: true, FallbackToFullHistory: true, SummaryUsage: auxTestUsage()}, []string{auxTestRequestID}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s, repo, _ := auxTestService(t)
 			s.emitBilling(auxTestContext(uuid.New()), auxTestRequestID, auxTestOrgID, auxTestModel,
-				router.Decision{Provider: "anthropic", Model: auxTestModel}, catalog.Pricing{}, turnLoopResult{Handover: c.handover},
+				router.Decision{Provider: "anthropic", Model: auxTestModel}, catalog.Pricing{}, routingpolicy.TurnRoute{Handover: c.handover},
 				4000, 700, 0, 0, catalog.UsageModifiers{})
 			var got []string
 			for _, d := range repo.snapshot() {
@@ -220,9 +222,9 @@ func TestUsageBypassEngaged_UnsetThresholdDefaultsToNinetyFivePercent(t *testing
 	}{{0.90, true}, {0.96, false}} {
 		obs := usage.NewObserver([]byte("salt"), 10*time.Minute, time.Now)
 		obs.Record(obs.Key([]byte(token)), usage.Snapshot{Primary: usage.Window{UsedPercent: c.used, WindowMinutes: 300}})
-		svc := &Service{hmmServing: hmmPorts(), clients: dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}}), usageObserver: obs}
+		svc := &Service{strategyServing: hmmPorts(), engine: dispatch.NewEngine(dispatch.NewClients(map[string]providers.Client{providers.ProviderAnthropic: &bypassFakeProvider{}, providers.ProviderOpenAI: &bypassFakeProvider{}})), credentials: credentials.Brokerage{UsageObserver: obs}}
 		ctx := context.WithValue(context.Background(), credentials.AnthropicSubscriptionContextKey{}, token)
-		ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, UsageBypassConfig{Enabled: true})
+		ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{Enabled: true})
 		_, ok := svc.usageBypassEngaged(ctx, http.Header{}, router.Request{
 			RequestedModel:   "claude-sonnet-4-6",
 			EnabledProviders: map[string]struct{}{providers.ProviderAnthropic: {}},

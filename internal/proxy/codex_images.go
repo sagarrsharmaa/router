@@ -11,6 +11,7 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/observability"
 	"weave-os/router/internal/providers"
 	"weave-os/router/internal/requestcontext"
@@ -19,16 +20,6 @@ import (
 	"weave-os/router/internal/telemetry/turnrecord"
 
 	"github.com/tidwall/gjson"
-)
-
-const (
-	CodexImageGenerations = "generations"
-	CodexImageEdits       = "edits"
-)
-
-var (
-	ErrCodexImagesRequireOwnCredential   = errors.New("image generation through the router requires signing in to Codex with ChatGPT, an OpenAI API key, or an OpenAI key saved in Weave")
-	ErrCodexImagesUnavailableWithGateway = errors.New("image generation through the router is unavailable while a gateway key serves this installation")
 )
 
 type codexImageForwarder interface {
@@ -44,7 +35,7 @@ func NewCodexImages(svc *Service) CodexImages {
 }
 
 func (c CodexImages) ForwardWithCallerCredential(ctx context.Context, headers http.Header, operation string, body []byte, w http.ResponseWriter) error {
-	if operation != CodexImageGenerations && operation != CodexImageEdits {
+	if operation != ingress.CodexImageGenerations && operation != ingress.CodexImageEdits {
 		return fmt.Errorf("unsupported Codex image operation %q", operation)
 	}
 	client, err := c.svc.provider(providers.ProviderOpenAI)
@@ -56,7 +47,7 @@ func (c CodexImages) ForwardWithCallerCredential(ctx context.Context, headers ht
 		return fmt.Errorf("OpenAI provider does not support Codex image requests")
 	}
 	if len(credentials.GatewayProviders(credentials.ExternalKeysFromContext(ctx))) > 0 {
-		return ErrCodexImagesUnavailableWithGateway
+		return ingress.ErrCodexImagesUnavailableWithGateway
 	}
 	if creds := codexImageCallerCredential(ctx, headers); creds != nil {
 		return forwarder.ForwardCodexImageRequest(requestcontext.WithCredentials(ctx, creds), operation, body, headers, w)
@@ -72,20 +63,20 @@ func (c CodexImages) ForwardWithCallerCredential(ctx context.Context, headers ht
 	if served {
 		return err
 	}
-	return ErrCodexImagesRequireOwnCredential
+	return ingress.ErrCodexImagesRequireOwnCredential
 }
 
-func codexImageCallerCredential(ctx context.Context, headers http.Header) *Credentials {
-	if byokFirst(ctx, providers.ProviderOpenAI) {
+func codexImageCallerCredential(ctx context.Context, headers http.Header) *requestcontext.Credentials {
+	if credentials.ByokFirst(ctx, providers.ProviderOpenAI) {
 		if byok := codexImageBYOK(ctx); byok != nil {
 			return byok
 		}
 	}
-	return ExtractClientCredentials(providers.ProviderOpenAI, headers)
+	return requestcontext.ExtractClientCredentials(providers.ProviderOpenAI, headers)
 }
 
-func codexImageBYOK(ctx context.Context) *Credentials {
-	if byok := usableBYOK(ctx, providers.ProviderOpenAI); byok != nil && byok.BaseURL == "" {
+func codexImageBYOK(ctx context.Context) *requestcontext.Credentials {
+	if byok := credentials.UsableBYOK(ctx, providers.ProviderOpenAI); byok != nil && byok.BaseURL == "" {
 		return byok
 	}
 	return nil
@@ -93,22 +84,22 @@ func codexImageBYOK(ctx context.Context) *Credentials {
 
 func (c CodexImages) forwardOnLinkedSubscription(ctx context.Context, forwarder codexImageForwarder, operation string, body []byte, headers http.Header, w http.ResponseWriter) (bool, error) {
 	svc := c.svc
-	if svc.credentials.ManagedSubscriptions == nil || !managedSubscriptionEnrolled(ctx, subscriptions.ProviderCodex) {
+	if svc.credentials.ManagedSubscriptions == nil || !credentials.ManagedSubscriptionEnrolled(ctx, subscriptions.ProviderCodex) {
 		return false, nil
 	}
 	owner := subscriptionOwnerFromContext(ctx)
-	lease, present, err := svc.credentials.ManagedSubscriptions.Lease(ctx, owner, subscriptions.ProviderCodex, ClientIdentityFrom(ctx).SessionID)
+	lease, present, err := svc.credentials.ManagedSubscriptions.Lease(ctx, owner, subscriptions.ProviderCodex, requestcontext.ClientIdentityFrom(ctx).SessionID)
 	if err != nil && !errors.Is(err, subscriptions.ErrNoAvailableAccount) {
-		return true, errors.Join(ErrSubscriptionPoolUnavailable, err)
+		return true, errors.Join(credentials.ErrSubscriptionPoolUnavailable, err)
 	}
 	if err != nil || !present {
 		return false, nil
 	}
 	defer lease.Release()
-	creds := &Credentials{
+	creds := &requestcontext.Credentials{
 		APIKey:                []byte(lease.AccessToken),
 		OAuth:                 true,
-		Source:                credSourceCodexSubscription,
+		Source:                requestcontext.SourceCodexSubscription,
 		AccountID:             []byte(lease.ProviderAccount),
 		PrincipalID:           "chatgpt-account:" + lease.ProviderAccount,
 		SubscriptionAccountID: lease.AccountID,
@@ -130,7 +121,7 @@ func (c CodexImages) forwardOnLinkedSubscription(ctx context.Context, forwarder 
 
 func recordCodexImageLeaseOutcome(ctx context.Context, svc *Service, owner auth.SubscriptionOwner, lease subscriptions.Lease, attemptErr error) {
 	if attemptErr == nil {
-		activateManagedSubscription(ctx, svc.credentials.ManagedSubscriptions, owner, subscriptions.ProviderCodex, lease)
+		credentials.ActivateManagedSubscription(ctx, svc.credentials.ManagedSubscriptions, owner, subscriptions.ProviderCodex, lease)
 		return
 	}
 	var relayed *providers.UpstreamStatusError
@@ -147,7 +138,7 @@ func codexImagePlanLacksImageAccess(attemptErr error) bool {
 }
 
 func recordCodexImageUsage(ctx context.Context, svc *Service, model string, started time.Time, attemptErr error) {
-	installationID := installationIDFromContext(ctx)
+	installationID := requestcontext.InstallationIDFromContext(ctx)
 	if installationID == uuid.Nil {
 		return
 	}
@@ -155,7 +146,7 @@ func recordCodexImageUsage(ctx context.Context, svc *Service, model string, star
 	latency := svc.clock.Now().Sub(started).Milliseconds()
 	params := turnrecord.InsertTelemetryParams{
 		InstallationID:     installationID.String(),
-		APIKeyID:           apiKeyIDFromContext(ctx),
+		APIKeyID:           requestcontext.APIKeyIDFromContext(ctx),
 		RequestID:          requestID,
 		SpanType:           "router.upstream",
 		TraceID:            requestID,
@@ -166,7 +157,7 @@ func recordCodexImageUsage(ctx context.Context, svc *Service, model string, star
 		UpstreamLatencyMs:  latency,
 		TotalLatencyMs:     latency,
 		UpstreamStatusCode: int32(upstreamStatus(attemptErr)),
-		CredentialSource:   credSourceCodexSubscription,
+		CredentialSource:   requestcontext.SourceCodexSubscription,
 		CapacitySource:     string(entitlement.CapacitySourceLinkedCodex),
 	}
 	applySubscriptionWinnerTelemetry(ctx, &params)

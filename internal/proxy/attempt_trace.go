@@ -9,9 +9,12 @@ import (
 
 	"github.com/tidwall/sjson"
 
+	"weave-os/router/internal/credentials"
 	"weave-os/router/internal/dispatch"
 	"weave-os/router/internal/inference"
+	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/observability"
+	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/telemetry/turnrecord"
 )
 
@@ -37,12 +40,12 @@ func customerOwnedCredential(ctx context.Context) bool {
 	if managedSubscriptionCredentialSource(ctx) != "" {
 		return false
 	}
-	creds := CredentialsFromContext(ctx)
+	creds := credentials.CredentialsFromContext(ctx)
 	if creds == nil || len(creds.APIKey) == 0 || creds.SubscriptionAccountID != "" {
 		return false
 	}
 	switch creds.Source {
-	case credSourceBYOK, credSourceClient, credSourceSubscription, credSourceCodexSubscription:
+	case requestcontext.SourceBYOK, requestcontext.SourceClient, requestcontext.SourceSubscription, requestcontext.SourceCodexSubscription:
 		return true
 	}
 	return false
@@ -63,7 +66,7 @@ func describeAttempt(ctx context.Context, trace *dispatch.AttemptTrace, attempt 
 				Err:                    err,
 				BodyTranslated:         diagnosis.BodyTranslated,
 				CustomerCredential:     customerCredential,
-				RejectedFieldUnchanged: rejectedFieldUnchanged(err, inbound, sent),
+				RejectedFieldUnchanged: ingress.RejectedFieldUnchanged(err, inbound, sent),
 			}))
 			logAttemptFailure(ctx, attempt, err, diagnosis)
 		}

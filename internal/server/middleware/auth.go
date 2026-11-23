@@ -11,8 +11,8 @@ import (
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/flags"
 	"weave-os/router/internal/observability"
-	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/router"
+	"weave-os/router/internal/telemetry/capture"
 
 	"github.com/gin-gonic/gin"
 )
@@ -114,7 +114,7 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 			if apiKey.PaidFallbackOnSubscriptionRefusal {
 				ctx = context.WithValue(ctx, requestcontext.APIKeyPaidFallbackOnSubscriptionRefusalContextKey{}, true)
 			}
-			ctx = proxy.WithManagedSubscriptionUsage(ctx)
+			ctx = credentials.WithManagedSubscriptionUsage(ctx)
 			owner := subscriptionOwnerForRequest(c, apiKey)
 			c.Set(ctxKeySubscriptionOwner, owner)
 			ctx = credentials.WithSubscriptionOwner(ctx, owner)
@@ -124,7 +124,7 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 					observability.FromContext(ctx).Error("Failed to load subscription account enrollment", "err", listErr)
 					ctx = context.WithValue(ctx, credentials.ManagedSubscriptionEnrollmentUnavailableContextKey{}, true)
 				} else {
-					ctx = proxy.WithManagedSubscriptionCandidates(ctx, accounts)
+					ctx = credentials.WithManagedSubscriptionCandidates(ctx, accounts)
 				}
 			}
 		}
@@ -165,7 +165,7 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 				})
 			}
 			if installation.UsageBypassEnabled {
-				ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, proxy.UsageBypassConfig{
+				ctx = context.WithValue(ctx, requestcontext.InstallationUsageBypassContextKey{}, requestcontext.UsageBypassConfig{
 					Enabled:   true,
 					Threshold: installation.UsageBypassThreshold,
 				})
@@ -202,7 +202,7 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 			}
 			if installation.ContentCaptureMode != nil {
 				ctx = context.WithValue(ctx, requestcontext.InstallationCaptureModeContextKey{},
-					proxy.ParseCaptureMode(*installation.ContentCaptureMode))
+					capture.ParseMode(*installation.ContentCaptureMode))
 			}
 			if !svc.FlagOverridesDisabled() {
 				ctx = flags.WithOverrides(ctx, installation.FlagOverrides)
@@ -211,7 +211,7 @@ func withAPIKey(svc *auth.Service, byokRequiresOptIn bool, serving ...*ServingAd
 		byokAllowed := testPlan == nil && (!byokRequiresOptIn || (installation != nil && installation.ByokEnabled))
 		if externalKeys != nil && byokAllowed {
 			ctx = context.WithValue(ctx, credentials.ExternalAPIKeysContextKey{}, externalKeys)
-			ctx = proxy.WithForwardedHeaderSnapshot(ctx, externalKeys, c.Request.Header)
+			ctx = requestcontext.WithForwardedHeaderSnapshot(ctx, externalKeys, c.Request.Header)
 		}
 		ctx = withClusterModelListOverrides(ctx, clusterModelLists)
 		if installation != nil && installation.ID != "" {

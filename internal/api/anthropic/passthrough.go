@@ -1,18 +1,22 @@
 package anthropic
 
 import (
+	"context"
 	"io"
 	"net/http"
 
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/observability"
-	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
 
 	"github.com/gin-gonic/gin"
 )
 
-func PassthroughHandler(svc *proxy.Service) gin.HandlerFunc {
+type Passthrough interface {
+	PassthroughToProvider(ctx context.Context, body []byte, w http.ResponseWriter, r *http.Request) error
+}
+
+func PassthroughHandler(svc Passthrough, vocab ingress.ErrorVocabulary) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		log := observability.FromGin(c)
 
@@ -29,7 +33,7 @@ func PassthroughHandler(svc *proxy.Service) gin.HandlerFunc {
 		}
 
 		if err := svc.PassthroughToProvider(c.Request.Context(), body, c.Writer, c.Request); err != nil {
-			cls, ok := proxy.ClassifyDispatchError(err)
+			cls, ok := vocab.Classify(err)
 			if ok && cls.Kind == ingress.DispatchErrorUpstreamStatus {
 				if c.Writer.Written() {
 					return

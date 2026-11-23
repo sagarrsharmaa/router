@@ -136,7 +136,7 @@ func TestDispatchPlanned_SameBindingRetryUsesInjectedSleep(t *testing.T) {
 	}}
 	s := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderFireworks: only})
 	slept := 0
-	s.retrySleep = func(context.Context, time.Duration) error { slept++; return nil }
+	s.engine.SetRetrySleep(func(context.Context, time.Duration) error { slept++; return nil })
 
 	rec := httptest.NewRecorder()
 	buf := newPreludeBuffer(rec)
@@ -167,7 +167,7 @@ func TestDispatchPlanned_ExhaustionFlushesUpstreamEnvelope(t *testing.T) {
 func TestDispatchPlanned_DeferredFlushLeavesWriterUntouched(t *testing.T) {
 	only := &fakeClient{name: providers.ProviderFireworks, outcomes: []fakeOutcome{{err: &providers.UpstreamErrorResponse{Status: 500, Body: []byte(`boom`)}}}}
 	s := newServiceWithProviders(t, map[string]providers.Client{providers.ProviderFireworks: only})
-	s.retrySleep = noopSleep
+	s.engine.SetRetrySleep(noopSleep)
 
 	rec := httptest.NewRecorder()
 	buf := newPreludeBuffer(rec)
@@ -202,7 +202,7 @@ func TestDispatchPlanned_RecordsAttemptProvenance(t *testing.T) {
 		providers.ProviderFireworks: primary, providers.ProviderOpenRouter: fallback,
 	}), dispatch.WithAttemptSink(sink))
 	require.NoError(t, err)
-	s := (&Service{hmmServing: hmmPorts()}).WithInferenceExecutor(executor)
+	s := (&Service{engine: dispatch.NewEngine(nil), strategyServing: hmmPorts()}).WithInferenceExecutor(executor)
 
 	rec := httptest.NewRecorder()
 	buf := newPreludeBuffer(rec)
@@ -253,7 +253,7 @@ func TestDispatchPlanned_LeaseFailureIsTerminal(t *testing.T) {
 		providers.ProviderAnthropic: primary, providers.ProviderOpenRouter: fallback,
 	}).WithManagedSubscriptions(&scriptedSubscriptionLeaser{})
 	slept := 0
-	s.retrySleep = func(context.Context, time.Duration) error { slept++; return nil }
+	s.engine.SetRetrySleep(func(context.Context, time.Duration) error { slept++; return nil })
 	ctx := context.WithValue(context.Background(), credentials.ManagedSubscriptionEnrollmentUnavailableContextKey{}, true)
 
 	rec := httptest.NewRecorder()
@@ -262,7 +262,7 @@ func TestDispatchPlanned_LeaseFailureIsTerminal(t *testing.T) {
 	in.InitialDecision.Model = "claude-opus-4-8"
 	_, err := s.dispatchWithFallback(ctx, in)
 
-	require.ErrorIs(t, err, ErrSubscriptionPoolUnavailable)
+	require.ErrorIs(t, err, credentials.ErrSubscriptionPoolUnavailable)
 	assert.Equal(t, 0, primary.calls, "no upstream call without a lease")
 	assert.Equal(t, 0, fallback.calls, "a pool failure must not fail over to a paid binding")
 	assert.Equal(t, 0, slept, "a pool failure must not same-binding retry")

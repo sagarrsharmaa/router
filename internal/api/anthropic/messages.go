@@ -7,9 +7,9 @@ import (
 	"net/http"
 
 	"weave-os/router/internal/auth"
+	"weave-os/router/internal/conversation"
 	"weave-os/router/internal/ingress"
 	"weave-os/router/internal/observability"
-	"weave-os/router/internal/proxy"
 	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/server/middleware"
 
@@ -17,15 +17,19 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func PrepareHandoffHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc {
-	messages := MessagesHandler(svc, authSvc)
+func PrepareHandoffHandler(svc MessagesProxy, authSvc *auth.Service, vocab ingress.ErrorVocabulary) gin.HandlerFunc {
+	messages := MessagesHandler(svc, authSvc, vocab)
 	return func(c *gin.Context) {
-		c.Request = c.Request.WithContext(proxy.WithHandoffPreparation(c.Request.Context()))
+		c.Request = c.Request.WithContext(conversation.WithHandoffPreparation(c.Request.Context()))
 		messages(c)
 	}
 }
 
-func MessagesHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc {
+type MessagesProxy interface {
+	ProxyMessages(ctx context.Context, body []byte, w http.ResponseWriter, r *http.Request) error
+}
+
+func MessagesHandler(svc MessagesProxy, authSvc *auth.Service, vocab ingress.ErrorVocabulary) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		log := observability.FromGin(c)
 
@@ -65,7 +69,7 @@ func MessagesHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc 
 		c.Request = c.Request.WithContext(ctx)
 
 		if err := svc.ProxyMessages(c.Request.Context(), body, c.Writer, c.Request); err != nil {
-			cls, ok := proxy.ClassifyDispatchError(err)
+			cls, ok := vocab.Classify(err)
 			if ok && cls.Kind == ingress.DispatchErrorUpstreamStatus {
 				if c.Writer.Written() {
 					return
@@ -89,7 +93,7 @@ func MessagesHandler(svc *proxy.Service, authSvc *auth.Service) gin.HandlerFunc 
 				return
 			}
 			log.Error("Proxy failed", "err", err)
-			writeAnthropicError(c, http.StatusBadGateway, "api_error", proxy.TerminalErrorMessage(err))
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", vocab.TerminalMessage(err))
 			return
 		}
 	}

@@ -5,6 +5,8 @@ import (
 
 	"weave-os/router/internal/auth"
 	"weave-os/router/internal/billing"
+	"weave-os/router/internal/credentials"
+	"weave-os/router/internal/requestcontext"
 	"weave-os/router/internal/router/catalog"
 	"weave-os/router/internal/router/handover"
 	"weave-os/router/internal/router/llmescalation"
@@ -31,10 +33,10 @@ func (s *Service) billAuxiliaryInference(ctx context.Context, requestID, request
 	}
 	pricing, _ := catalog.PrimaryPriceFor(usage.Model)
 	usageMods := catalog.UsageModifiers{CacheCreation1h: usage.CacheCreation1h, InferenceGeo: catalog.InferenceGeo(usage.InferenceGeo)}
-	apiKeyID := apiKeyIDFromContext(ctx)
+	apiKeyID := requestcontext.APIKeyIDFromContext(ctx)
 	auxRequestID := requestID + requestIDSuffix
 
-	byokServed := byokServedForProvider(ctx, usage.Provider)
+	byokServed := credentials.ByokServedForProvider(ctx, usage.Provider)
 
 	s.fireBilling(ctx, billing.DebitInferenceParams{
 		OrganizationID:  externalID,
@@ -47,17 +49,17 @@ func (s *Service) billAuxiliaryInference(ctx context.Context, requestID, request
 		CacheRead:       usage.CacheRead,
 		Pricing:         pricing,
 		UsageModifiers:  usageMods,
-		HasOverride:     billing.HasOverrideFromContext(ctx) || weaveCreditsDenied(ctx),
+		HasOverride:     billing.HasOverrideFromContext(ctx) || billing.WeaveCreditsDeniedFromContext(ctx),
 		ByokServed:      byokServed,
 		APIKeyID:        apiKeyID,
 		RouterUserID:    auth.UserIDFrom(ctx),
 	})
 
-	installationID := installationIDFromContext(ctx)
+	installationID := requestcontext.InstallationIDFromContext(ctx)
 	if installationID == uuid.Nil {
 		return
 	}
-	clientID := ClientIdentityFrom(ctx)
+	clientID := requestcontext.ClientIdentityFrom(ctx)
 	inputCost := catalog.EffectiveInputCost(usage.InputTokens, usage.CacheCreation, usage.CacheRead, pricing, usage.Provider, usageMods)
 	outputCost := catalog.EffectiveOutputCost(catalog.PromptTokens(usage.InputTokens, usage.CacheCreation, usage.CacheRead, usage.Provider), usage.OutputTokens, pricing, usageMods)
 
