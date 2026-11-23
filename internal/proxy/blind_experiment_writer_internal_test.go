@@ -193,13 +193,13 @@ func TestBlindExperimentWriterUnusableRequestedModelStillDropsWeaveCost(t *testi
 }
 
 func TestUpstreamGatewayModeHidesTerminalSurfaces(t *testing.T) {
-	ctx := requestcontext.WithUpstreamGateway(context.Background(), nil, http.Header{})
+	ctx := requestcontext.WithUpstreamGateway(context.Background(), requestcontext.UpstreamGatewayHeaders{}, http.Header{})
 	assert.True(t, hideTerminalSurfacesForRequest(ctx))
 	assert.False(t, hideTerminalSurfacesForRequest(context.Background()))
 }
 
 func TestUpstreamGatewayWriterHidesRouterSurfacesButKeepsServedModel(t *testing.T) {
-	ctx := requestcontext.WithUpstreamGateway(context.Background(), nil, http.Header{})
+	ctx := requestcontext.WithUpstreamGateway(context.Background(), requestcontext.UpstreamGatewayHeaders{}, http.Header{})
 	rec := httptest.NewRecorder()
 	w, finish := withBlindExperimentWriter(ctx, rec, []byte(`{"model":"weave-auto","messages":[]}`))
 	w.Header().Set("Content-Type", "text/event-stream")
