@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 	"weave-os/router/internal/credentials"
-	"weave-os/router/internal/router/handover"
 	"weave-os/router/internal/routingpolicy"
 	"weave-os/router/internal/telemetry/respobserve"
 
@@ -29,58 +28,57 @@ import (
 )
 
 type messagesFinishedTurn struct {
-	w                         http.ResponseWriter
-	body                      []byte
-	facts                     requestcontext.RequestFacts
-	requestStart              time.Time
-	rateLimit                 *dispatch.ThrottleLedger
-	log                       *slog.Logger
-	env                       *translate.RequestEnvelope
-	responseBuffer            *responseCostBuffer
-	agentShadowMode           bool
-	sessionKey                [16]byte
-	feats                     translate.RoutingFeatures
-	promptText                string
-	embedInput                string
-	strategy                  router.Strategy
-	taskArm                   taskArmTurn
-	inboundSpiralSignals      conversation.SpiralSignals
-	inboundSpiralReasons      []conversation.SpiralReason
-	inboundSpiralComputed     bool
-	inboundLastUser           translate.LastUserMessageInfo
-	inboundUserPrompt         bool
-	inboundLatestToolCalls    []byte
-	overflowEstimate          int
-	req                       router.Request
-	routeRes                  routingpolicy.TurnRoute
-	decision                  router.Decision
-	tt                        turntype.TurnType
-	stickyHit                 bool
-	pinAgeSec                 int64
-	routeMs                   int64
-	compactionHandoverOutcome handover.Outcome
-	reqPricing                catalog.Pricing
-	actPricing                catalog.Pricing
-	opts                      translate.EmitOptions
-	effortServed              dispatch.EffortResolution
-	contentCap                *capture.Writer
-	policyOutcomeCap          *capture.Writer
-	preludeBuf                *preludeBuffer
-	refusalObs                *respobserve.RefusalObserver
-	toolUseObs                *respobserve.ToolUseObserver
-	streamCut                 *dispatch.StreamCutObserver
-	proxyStart                time.Time
-	proxyErr                  error
-	crossFormat               bool
-	extractor                 *telemetry.UsageExtractor
-	respSummary               translate.ResponseSummary
-	reqStats                  providers.RequestMutationStats
-	marker                    string
-	fastServed                bool
-	rescue                    *dispatch.MessagesRescue
-	winnerIdx                 int
-	finalProvider             string
-	proxyMs                   int64
+	w                      http.ResponseWriter
+	body                   []byte
+	facts                  requestcontext.RequestFacts
+	requestStart           time.Time
+	rateLimit              *dispatch.ThrottleLedger
+	log                    *slog.Logger
+	env                    *translate.RequestEnvelope
+	responseBuffer         *responseCostBuffer
+	agentShadowMode        bool
+	sessionKey             [16]byte
+	feats                  translate.RoutingFeatures
+	promptText             string
+	embedInput             string
+	strategy               router.Strategy
+	taskArm                taskArmTurn
+	inboundSpiralSignals   conversation.SpiralSignals
+	inboundSpiralReasons   []conversation.SpiralReason
+	inboundSpiralComputed  bool
+	inboundLastUser        translate.LastUserMessageInfo
+	inboundUserPrompt      bool
+	inboundLatestToolCalls []byte
+	overflowEstimate       int
+	req                    router.Request
+	routeRes               routingpolicy.TurnRoute
+	decision               router.Decision
+	tt                     turntype.TurnType
+	stickyHit              bool
+	pinAgeSec              int64
+	routeMs                int64
+	reqPricing             catalog.Pricing
+	actPricing             catalog.Pricing
+	opts                   translate.EmitOptions
+	effortServed           dispatch.EffortResolution
+	contentCap             *capture.Writer
+	policyOutcomeCap       *capture.Writer
+	preludeBuf             *preludeBuffer
+	refusalObs             *respobserve.RefusalObserver
+	toolUseObs             *respobserve.ToolUseObserver
+	streamCut              *dispatch.StreamCutObserver
+	proxyStart             time.Time
+	proxyErr               error
+	crossFormat            bool
+	extractor              *telemetry.UsageExtractor
+	respSummary            translate.ResponseSummary
+	reqStats               providers.RequestMutationStats
+	marker                 string
+	fastServed             bool
+	rescue                 *dispatch.MessagesRescue
+	winnerIdx              int
+	finalProvider          string
+	proxyMs                int64
 }
 
 type messagesTurnUsage struct {
@@ -309,9 +307,6 @@ func settleMessagesTurn(ctx context.Context, s *Service, t *messagesFinishedTurn
 	var subscriberSettlement subscriberSettlementState
 	if turnUsageBillable(ctx, t.proxyErr, usage.in, usage.out, usage.cacheCreation, usage.cacheRead) && !t.agentShadowMode {
 		subscriberSettlement = s.emitBilling(ctx, t.facts.RequestID, t.facts.ExternalID, t.feats.Model, t.decision, t.actPricing, t.routeRes, usage.in, usage.out, usage.cacheCreation, usage.cacheRead, usage.usageMods)
-		if t.compactionHandoverOutcome.Invoked && !t.compactionHandoverOutcome.FallbackToFullHistory {
-			s.billAuxiliaryInference(ctx, t.facts.RequestID, auxSuffixCompactionHandoverSummry, t.facts.ExternalID, t.compactionHandoverOutcome.SummaryUsage)
-		}
 	}
 	if subscriberTelemetry != nil {
 		applyTelemetrySettlement(subscriberTelemetry, turnUsageBillable(ctx, t.proxyErr, usage.in, usage.out, usage.cacheCreation, usage.cacheRead), subscriberSettlement)
@@ -325,22 +320,22 @@ func strikeMessagesArms(ctx context.Context, s *Service, t *messagesFinishedTurn
 	rescuedArmDemoted := ""
 	var rescuedArmDemotionReason sessionpin.DemotionReason
 	if !t.agentShadowMode && !t.routeRes.CallerModelPassthrough {
-		s.maybeEvictPinAfterUpstreamErr(ctx, t.stickyHit, t.proxyErr, t.decision.Reason, sessionTarget{strategy: t.strategy, installationID: t.facts.InstallationID, sessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes))
+		s.maybeEvictPinAfterUpstreamErr(ctx, t.stickyHit, t.proxyErr, t.decision.Reason, routingpolicy.SessionTarget{Strategy: t.strategy, InstallationID: t.facts.InstallationID, SessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes))
 
-		armDemoted = s.maybeDemoteArmAfterCommittedStreamFailure(ctx, t.preludeBuf.Committed(), t.routeRes.HardPinned, t.proxyErr, t.decision.Model, t.decision.Reason, sessionTarget{strategy: t.strategy, installationID: t.facts.InstallationID, sessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
+		armDemoted = s.maybeDemoteArmAfterCommittedStreamFailure(ctx, t.preludeBuf.Committed(), t.routeRes.HardPinned, t.proxyErr, t.decision.Model, t.decision.Reason, routingpolicy.SessionTarget{Strategy: t.strategy, InstallationID: t.facts.InstallationID, SessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
 		if armDemoted != "" {
 			armDemotionReasonValue = sessionpin.DemotionReasonCommittedStreamFailure
 		}
 
 		primaryModelRescueRan := t.rescue.SiblingRescueRan || t.decision.Model != t.rescue.PrimaryModel
 		if providers.IsResponseHeaderTimeout(t.rescue.PrimaryFailureErr) && (primaryModelRescueRan || t.proxyErr != nil) {
-			rescuedArmDemoted, rescuedArmDemotionReason = s.maybeStrikeArmAfterRescuedFailure(ctx, primaryModelRescueRan, t.routeRes.HardPinned, t.rescue.PrimaryFailureErr, t.rescue.PrimaryDecision, sessionTarget{strategy: t.strategy, installationID: t.facts.InstallationID, sessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
+			rescuedArmDemoted, rescuedArmDemotionReason = s.maybeStrikeArmAfterRescuedFailure(ctx, primaryModelRescueRan, t.routeRes.HardPinned, t.rescue.PrimaryFailureErr, t.rescue.PrimaryDecision, routingpolicy.SessionTarget{Strategy: t.strategy, InstallationID: t.facts.InstallationID, SessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
 		} else {
-			rescuedArmDemoted, rescuedArmDemotionReason = s.maybeStrikeArmAfterRescuedFailure(ctx, t.rescue.SiblingRescueRan, t.routeRes.HardPinned, t.rescue.RescuedPrimaryErr, t.rescue.RescuedPrimary, sessionTarget{strategy: t.strategy, installationID: t.facts.InstallationID, sessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
+			rescuedArmDemoted, rescuedArmDemotionReason = s.maybeStrikeArmAfterRescuedFailure(ctx, t.rescue.SiblingRescueRan, t.routeRes.HardPinned, t.rescue.RescuedPrimaryErr, t.rescue.RescuedPrimary, routingpolicy.SessionTarget{Strategy: t.strategy, InstallationID: t.facts.InstallationID, SessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
 		}
 		s.strikeRescuedModelsForTurn(ctx, t.proxyErr, t.decision, t.routeRes.HardPinned, t.routeRes.SessionKey, stickyStateRole(t.routeRes), t.routeRes.PinRole)
 		if t.proxyErr != nil {
-			unrescuedStallDemoted := s.maybeDemoteArmAfterUnrescuedStall(ctx, t.rescue.SiblingRescueRan, t.preludeBuf.Committed(), t.routeRes.HardPinned, t.rescue.PrimarySubscriptionArmFailure, t.rescue.PrimaryDecision, sessionTarget{strategy: t.strategy, installationID: t.facts.InstallationID, sessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
+			unrescuedStallDemoted := s.maybeDemoteArmAfterUnrescuedStall(ctx, t.rescue.SiblingRescueRan, t.preludeBuf.Committed(), t.routeRes.HardPinned, t.rescue.PrimarySubscriptionArmFailure, t.rescue.PrimaryDecision, routingpolicy.SessionTarget{Strategy: t.strategy, InstallationID: t.facts.InstallationID, SessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
 			if armDemoted == "" && unrescuedStallDemoted != "" {
 				armDemoted = unrescuedStallDemoted
 				armDemotionReasonValue = sessionpin.DemotionReasonUnrescuedStall
@@ -351,7 +346,7 @@ func strikeMessagesArms(ctx context.Context, s *Service, t *messagesFinishedTurn
 		s.maybeExpireSubscriptionArmPin(ctx, t.strategy, t.rescue.PrimarySubscriptionArmFailure, t.decision.Reason, t.facts.InstallationID, t.routeRes.SessionKey, stickyStateRole(t.routeRes))
 
 		if !t.rescue.BaselineAttempted {
-			s.maybeDisableProviderAfterOverload(ctx, t.stickyHit, t.proxyErr, t.finalProvider, t.decision.Reason, sessionTarget{strategy: t.strategy, installationID: t.facts.InstallationID, sessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
+			s.maybeDisableProviderAfterOverload(ctx, t.stickyHit, t.proxyErr, t.finalProvider, t.decision.Reason, routingpolicy.SessionTarget{Strategy: t.strategy, InstallationID: t.facts.InstallationID, SessionKey: t.routeRes.SessionKey}, stickyStateRole(t.routeRes), t.routeRes.PinRole)
 		}
 
 		s.maybeRepinOnRefusal(ctx, t.strategy, t.refusalObs, t.routeRes.SessionKey, stickyStateRole(t.routeRes), t.decision)
